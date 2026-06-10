@@ -169,6 +169,7 @@ async def test_hebrew_requires_text_and_voice(monkeypatch):
 
 async def test_hebrew_audio_path_skips_tts(monkeypatch, tmp_path):
     carrier, upload, _ = _patch_chain(monkeypatch)
+    monkeypatch.setattr("video_mcp.tools.seedance.media_mod.probe_duration", MagicMock(return_value=3.2))
     take = tmp_path / "approved.mp3"
     take.write_bytes(b"APPROVED_AUDIO")
     piapi = AsyncMock()
@@ -187,6 +188,7 @@ async def test_hebrew_audio_path_skips_tts(monkeypatch, tmp_path):
 
 async def test_hebrew_audio_path_still_runs_source_gate(monkeypatch, tmp_path):
     _patch_chain(monkeypatch)
+    monkeypatch.setattr("video_mcp.tools.seedance.media_mod.probe_duration", MagicMock(return_value=3.2))
     take = tmp_path / "approved.mp3"
     take.write_bytes(b"APPROVED_AUDIO")
     piapi = AsyncMock()
@@ -199,6 +201,21 @@ async def test_hebrew_audio_path_still_runs_source_gate(monkeypatch, tmp_path):
                    audio_path=str(take), duration=5, verify_speech=True)
     eleven.transcribe.assert_awaited_once_with(str(take), language_code="he")
     assert res["source_audio_qa"]["verdict"] == "pass"
+
+
+async def test_hebrew_audio_path_too_long_errors(monkeypatch, tmp_path):
+    _patch_chain(monkeypatch)
+    monkeypatch.setattr("video_mcp.tools.seedance.media_mod.probe_duration", MagicMock(return_value=12.4))
+    take = tmp_path / "long.mp3"
+    take.write_bytes(b"AUDIO")
+    piapi = AsyncMock()
+    fn = await get_tool(make_deps(piapi, AsyncMock()))
+
+    with pytest.raises(ToolError) as ei:
+        await fn(prompt="scene", language="he", text="שלום",
+                 audio_path=str(take), duration=5, verify_speech=False)
+    assert "split_audio" in str(ei.value)
+    piapi.create_task.assert_not_called()
 
 
 async def test_hebrew_audio_path_missing_file_errors(monkeypatch):

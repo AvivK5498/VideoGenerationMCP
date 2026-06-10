@@ -30,6 +30,7 @@ from video_mcp.schemas.elevenlabs import HEBREW_MODEL, VoiceoverRequest
 from video_mcp.schemas.seedance import SeedanceVideoRequest
 from video_mcp.tools import Deps
 from video_mcp.utils import carrier as carrier_mod
+from video_mcp.utils import media as media_mod
 from video_mcp.utils import uploader as uploader_mod
 from video_mcp.utils.transliterate import has_hebrew, transliterate_hebrew
 
@@ -320,8 +321,20 @@ async def _hebrew_chain(
             "Hebrew lipsync requires either `voice_id` (ElevenLabs TTS) or `audio_path` "
             "(a pre-approved local mp3 of the same `text`)."
         )
-    if audio_path and not os.path.isfile(audio_path):
-        raise ToolError(f"audio_path not found: {audio_path}")
+    if audio_path:
+        if not os.path.isfile(audio_path):
+            raise ToolError(f"audio_path not found: {audio_path}")
+        try:
+            resolved_for_audio = round_duration_to_allowed(duration)
+            audio_len = media_mod.probe_duration(audio_path, ffprobe_bin=deps.settings.ffprobe_bin)
+        except (ValueError, VideoMCPError) as exc:
+            raise ToolError(str(exc)) from exc
+        if audio_len > resolved_for_audio:
+            raise ToolError(
+                f"audio_path is {audio_len:.2f}s but the clip is {resolved_for_audio}s — the speech "
+                "would be cut off. Use a longer duration (5/10/15) or split the audio "
+                "(split_audio) across multiple clips."
+            )
 
     # Romanized transcript for the prompt (Hebrew -> Latin; English tokens kept exact).
     try:

@@ -37,6 +37,7 @@ class Settings:
     # Per-request HTTP timeout for PiAPI calls (slow peak-hour submits). 40 min.
     http_timeout_s: float = field(default_factory=lambda: float(_env("PIAPI_HTTP_TIMEOUT_S", "2400")))
     ffmpeg_bin: str = field(default_factory=lambda: _env("FFMPEG_BIN", "ffmpeg"))
+    ffprobe_bin: str = field(default_factory=lambda: _env("FFPROBE_BIN", "ffprobe"))
 
     # Hebrew transliteration via LLM: local LMStudio first, OpenRouter fallback.
     lmstudio_base_url: str = field(default_factory=lambda: _env("LMSTUDIO_BASE_URL", "http://localhost:1234/v1"))

@@ -63,6 +63,10 @@ class CarrierError(VideoMCPError):
     """Failed to generate the black-video audio carrier (ffmpeg)."""
 
 
+class MediaError(VideoMCPError):
+    """Local media assembly failed (ffmpeg/ffprobe stitch, split, probe, frame)."""
+
+
 class TransliterationError(VideoMCPError):
     """LLM transliteration failed (both LMStudio and OpenRouter unavailable, or
     the model returned an empty / still-Hebrew result)."""

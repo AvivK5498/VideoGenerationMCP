@@ -167,7 +167,37 @@ Human references on less-restriction task types must be `asset://` refs:
 // -> { "task_id": "...", "status": "completed", "video_url": "https://.../out.mp4", "error": null }
 ```
 
-## 8. QA the generated speech of an async job
+## 8. Multi-clip ad (e.g. 30s) — master VO, split, generate, bridge, stitch
+
+Seedance caps at 15s/clip, so a 30s ad is several jobs assembled locally:
+
+```json
+// 1. ONE master voiceover for the whole script (audition it once).
+{ "tool": "generate_elevenlabs_voiceover",
+  "arguments": { "text": "<full 30s script>", "voice_id": "<voice>", "language": "he",
+                 "with_timestamps": true } }
+// -> { "audio_path": "/tmp/master.mp3", "alignment": {...} }  — pick sentence-boundary times
+
+// 2. Split at those boundaries.
+{ "tool": "split_audio",
+  "arguments": { "audio_path": "/tmp/master.mp3", "split_points_s": [14.2] } }
+// -> { "segments": [ { "path": ".../seg01.mp3", "duration_s": 14.2 }, { "path": ".../seg02.mp3", ... } ] }
+
+// 3. One generate_seedance_video per segment (same asset:// refs for identity),
+//    each with audio_path=<segment path> and a duration >= the segment length.
+
+// 4. Optional continuity bridge: last frame of clip 1 -> first frame of clip 2.
+{ "tool": "extract_frame", "arguments": { "video": "https://.../clip1.mp4", "upload": true } }
+// -> { "frame_path": "...", "frame_url": "https://tmpfiles.org/..." }  (use as image_first)
+
+// 5. Final assembly (after each clip passes verify_generated_audio).
+{ "tool": "stitch_videos",
+  "arguments": { "videos": ["https://.../clip1.mp4", "https://.../clip2.mp4"],
+                 "output_path": "/path/final-30s.mp4" } }
+// -> { "output_path": "/path/final-30s.mp4", "duration_s": 30.1, "clips": 2 }
+```
+
+## 9. QA the generated speech of an async job
 
 Once the task completes, run the generated-video Scribe gate (do not use local
 whisper/ASR):
