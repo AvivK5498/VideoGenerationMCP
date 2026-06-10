@@ -85,9 +85,10 @@ Step 2 — generate. `text` stays in **Hebrew** (it feeds TTS); `prompt` must be
   }
 }
 ```
-The server forces `task_type="seedance-2"`, `mode="omni_reference"`, runs ElevenLabs
-`eleven_v3`/`he`, builds the black carrier, uploads both files, and submits. Response
-includes `task_id`, `audio_url`, `carrier_url`, `mode`, `task_type`.
+The server forces `task_type="seedance-2-less-restriction"`, `mode="omni_reference"`,
+runs ElevenLabs `eleven_v3`/`he`, builds the black carrier, uploads both files, and
+submits. Response includes `task_id`, `audio_url`, `carrier_url`, `mode`, `task_type`,
+and a `source_audio_qa` Scribe verdict on the generated speech.
 
 > Passing raw Hebrew in `prompt` (instead of the Latin transliteration) raises a
 > `ToolError` instructing you to call `transliterate_hebrew` first.
@@ -127,34 +128,24 @@ includes `task_id`, `audio_url`, `carrier_url`, `mode`, `task_type`.
 }
 ```
 
-## 6. Moderation bypass ladder (reference falsely flagged)
+## 6. Private assets (persona references on the less-restriction tier)
 
-Clean first run with a model face reference (the chain composes `@image1`):
+Register a persona reference once, reuse it as an `asset://` ref (~7-day TTL):
+
+```json
+{ "tool": "upload_asset",
+  "arguments": { "image": "https://host/persona.jpg", "name": "persona-identity", "asset_type": "Image" } }
+// -> { "asset_ref": "asset://01jx...", "status": "Active", "expires_at": "..." }
+```
+
+Human references on less-restriction task types must be `asset://` refs:
+
 ```json
 { "tool": "generate_seedance_video",
-  "arguments": { "language":"he", "text":"היי, חייבת לספר לכם על המוצר", "voice_id":"<elevenlabs_voice_id>",
-                 "prompt":"young woman talking to camera, cafe, UGC selfie",
-                 "image_urls":["https://host/face.jpg"], "duration":10, "wait":true } }
+  "arguments": { "language": "he", "text": "היי, חייבת לספר לכם על המוצר", "voice_id": "<elevenlabs_voice_id>",
+                 "prompt": "confident adult woman talking to camera, cafe, UGC selfie",
+                 "human_image_urls": ["asset://01jx..."], "duration": 10, "wait": false } }
 ```
-If the response is a terminal moderation failure:
-```json
-{ "status":"failed", "failure_reason":"moderation",
-  "provider_message":"Your content violated community guidelines.",
-  "next_action":"apply_bypass", "next_method":"grid",
-  "bypass_ladder":["grid","light_posterize","heavy_grid","heavy_posterize"],
-  "instructions":"Run process_reference_for_moderation(image_url, method='grid') ... bypass_methods_used=['grid']" }
-```
-Process the reference and re-submit (same prompt, processed image, ladder state):
-```json
-{ "tool":"process_reference_for_moderation", "arguments":{ "image":"https://host/face.jpg", "method":"grid" } }
-// -> { "processed_url":"https://tmpfiles.org/dl/.../modref_grid.png", "method":"grid", ... }
-
-{ "tool":"generate_seedance_video",
-  "arguments":{ "language":"he", "text":"...", "voice_id":"...", "prompt":"<same prompt>",
-                "image_urls":["https://tmpfiles.org/dl/.../modref_grid.png"],
-                "bypass_methods_used":["grid"], "duration":10, "wait":true } }
-```
-Escalate `grid → light_posterize → heavy_grid → heavy_posterize` on repeat failure; stop when `next_action=="stop"`.
 
 ## 7. Poll a task
 

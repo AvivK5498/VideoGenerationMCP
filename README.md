@@ -31,26 +31,16 @@ less-restriction tier; 720p default (1080p on request).
 - Optional: `OPENROUTER_API_KEY` (fallback for Hebrew transliteration; primary is a
   local [LMStudio](https://lmstudio.ai/) model, default `google/gemma-4-e4b`)
 
-## Setup
-
-```bash
-git clone git@github.com:AvivK5498/VideoGenerationMCP.git
-cd VideoGenerationMCP
-uv sync
-cp .env.example .env   # fill in PIAPI_KEY + ELEVENLABS_KEY
-uv run pytest -q       # 203 tests
-```
-
-Run standalone (stdio): `uv run python -m video_mcp.server`
-
 ## Connect to Claude Code
+
+No clone needed — `uvx` installs and runs the server straight from this repo:
 
 ```bash
 claude mcp add video \
   --env PIAPI_KEY=your_piapi_key \
   --env ELEVENLABS_KEY=your_elevenlabs_key \
   --env OPENROUTER_API_KEY=your_openrouter_key \
-  -- uv run --directory /ABSOLUTE/PATH/TO/VideoGenerationMCP python -m video_mcp.server
+  -- uvx --from git+https://github.com/AvivK5498/VideoGenerationMCP video-mcp
 ```
 
 Or add it to a project `.mcp.json`:
@@ -59,8 +49,8 @@ Or add it to a project `.mcp.json`:
 {
   "mcpServers": {
     "video": {
-      "command": "uv",
-      "args": ["run", "--directory", "/ABSOLUTE/PATH/TO/VideoGenerationMCP", "python", "-m", "video_mcp.server"],
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/AvivK5498/VideoGenerationMCP", "video-mcp"],
       "env": { "PIAPI_KEY": "…", "ELEVENLABS_KEY": "…", "OPENROUTER_API_KEY": "…" }
     }
   }
@@ -75,13 +65,27 @@ Add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.video]
-command = "uv"
-args = ["run", "--directory", "/ABSOLUTE/PATH/TO/VideoGenerationMCP", "python", "-m", "video_mcp.server"]
+command = "uvx"
+args = ["--from", "git+https://github.com/AvivK5498/VideoGenerationMCP", "video-mcp"]
 env = { PIAPI_KEY = "…", ELEVENLABS_KEY = "…", OPENROUTER_API_KEY = "…" }
 ```
 
-(or `codex mcp add video -- uv run --directory /ABSOLUTE/PATH/TO/VideoGenerationMCP python -m video_mcp.server`).
+(or `codex mcp add video -- uvx --from git+https://github.com/AvivK5498/VideoGenerationMCP video-mcp`).
 Codex MCP servers communicate over stdio; restart Codex to pick up the config.
+
+## Local development
+
+```bash
+git clone git@github.com:AvivK5498/VideoGenerationMCP.git
+cd VideoGenerationMCP
+uv sync
+cp .env.example .env   # fill in PIAPI_KEY + ELEVENLABS_KEY
+uv run pytest -q       # 203 tests
+```
+
+Run standalone (stdio): `uv run video-mcp`. To wire a local checkout instead of the
+git install, swap the command for
+`uv run --directory /ABSOLUTE/PATH/TO/VideoGenerationMCP video-mcp`.
 
 ## More
 
