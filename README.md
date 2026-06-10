@@ -22,6 +22,7 @@ interface to **Kling Omni** + **Seedance 2** video generation (via PiAPI) and
 | `extract_frame` | Grab a frame (default: last) for first/last-frame clip bridging |
 | `stitch_videos` | Concat clips (normalized) into the final multi-clip ad |
 | `host_file` | Host a local file on a temporary public URL (non-persona refs) |
+| `burn_captions` | Word-timed captions via Scribe (RTL-correct Hebrew) burned onto a video |
 
 Highlights: Hebrew BVAC lipsync (ElevenLabs `eleven_v3` → ffmpeg black-video carrier →
 Seedance `omni_reference`) with two Scribe audio gates; `@`-tag reference validation;

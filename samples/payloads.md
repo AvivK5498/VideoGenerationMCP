@@ -197,7 +197,25 @@ Seedance caps at 15s/clip, so a 30s ad is several jobs assembled locally:
 // -> { "output_path": "/path/final-30s.mp4", "duration_s": 30.1, "clips": 2 }
 ```
 
-## 9. QA the generated speech of an async job
+## 9. Burn captions
+
+Auto mode transcribes the video's OWN audio (Scribe word timestamps) and burns
+short word-timed chunks; pass `captions` to control text exactly (e.g. when
+re-synthesis drifted a word):
+
+```json
+{ "tool": "burn_captions",
+  "arguments": { "task_id": "5a9b4d8f-...", "language": "he", "max_words": 4 } }
+// -> { "output_path": "/tmp/captioned_....mp4",
+//      "captions": [ { "text": "חופשה?", "start": 1.66, "end": 2.33 }, ... ] }
+
+{ "tool": "burn_captions",
+  "arguments": { "video": "/path/clip.mp4",
+                 "captions": [ { "text": "חופשה?", "start": 1.55, "end": 2.85 },
+                                { "text": "Flycard", "start": 3.0, "end": 4.4 } ] } }
+```
+
+## 10. QA the generated speech of an async job
 
 Once the task completes, run the generated-video Scribe gate (do not use local
 whisper/ASR):

@@ -17,6 +17,7 @@ from video_mcp.tools import Deps
 from video_mcp.tools.elevenlabs import register_elevenlabs_tools
 from video_mcp.tools.kling import register_kling_tools
 from video_mcp.tools.assets import register_asset_tools
+from video_mcp.tools.captions import register_caption_tools
 from video_mcp.tools.media import register_media_tools
 from video_mcp.tools.misc import register_misc_tools
 from video_mcp.tools.seedance import register_seedance_tools
@@ -40,6 +41,7 @@ def build_server(settings: Settings | None = None) -> FastMCP:
     register_misc_tools(mcp, deps)
     register_asset_tools(mcp, deps)
     register_media_tools(mcp, deps)
+    register_caption_tools(mcp, deps)
 
     logger.info("video-mcp server built")
     return mcp

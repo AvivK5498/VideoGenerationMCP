@@ -16,6 +16,7 @@ EXPECTED_TOOLS = {
     "split_audio",
     "extract_frame",
     "host_file",
+    "burn_captions",
     "generate_elevenlabs_voiceover",
     "list_voices",
     "get_task",
