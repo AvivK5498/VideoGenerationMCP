@@ -26,7 +26,7 @@ def _settings(**kw) -> Settings:
         openrouter_base_url=OPENROUTER,
         openrouter_api_key="or-test-key",
         openrouter_model="nvidia/llama-3.1-nemotron-70b-instruct",
-        transliterate_openrouter_model="google/gemini-2.5-flash",
+        transliterate_openrouter_model="google/gemini-3.5-flash",
         transliterate_primary="openrouter",
         transliterate_max_tokens=512,
         transliterate_timeout_s=30,
@@ -76,8 +76,10 @@ async def test_openrouter_is_primary_by_default():
     result = await transliterate_hebrew("שלום עולם", _settings())
     assert result == "shalom olam"
     assert or_route.called
-    req_body = or_route.calls.last.request.content
-    assert b"google/gemini-2.5-flash" in req_body  # dedicated strong model, not the shared default
+    import json as _json
+    req_body = _json.loads(or_route.calls.last.request.content)
+    assert req_body["model"] == "google/gemini-3.5-flash"  # dedicated strong model
+    assert req_body["reasoning"] == {"effort": "minimal"}  # full thinking starves the answer
     assert or_route.calls.last.request.headers["authorization"] == "Bearer or-test-key"
 
 

@@ -50,7 +50,7 @@ class Settings:
     # Transliteration is morphology-sensitive (gender endings, vowel recovery) —
     # it gets a dedicated strong OpenRouter model and runs OpenRouter-first.
     transliterate_openrouter_model: str = field(
-        default_factory=lambda: _env("TRANSLITERATE_OPENROUTER_MODEL", "google/gemini-2.5-flash")
+        default_factory=lambda: _env("TRANSLITERATE_OPENROUTER_MODEL", "google/gemini-3.5-flash")
     )
     transliterate_primary: str = field(
         default_factory=lambda: _env("TRANSLITERATE_PRIMARY", "openrouter")

@@ -5,7 +5,7 @@ Rule-based letter mapping cannot recover the unwritten vowels of an abjad
 an LLM. Hebrew morphology (gender endings, vowel recovery, hitpael clusters) is
 where small local models fail, so the resolution order is:
 
-    1. OpenRouter with a dedicated strong model  (default google/gemini-2.5-flash)
+    1. OpenRouter with a dedicated strong model  (default google/gemini-3.5-flash)
     2. local LMStudio                            (offline fallback)
 
 (`TRANSLITERATE_PRIMARY=lmstudio` flips the order.)
@@ -134,7 +134,7 @@ def _messages(text: str) -> list[dict[str, str]]:
 
 async def _chat(
     *, base_url: str, model: str, text: str, max_tokens: int, timeout: float,
-    api_key: str | None, client: httpx.AsyncClient | None,
+    api_key: str | None, client: httpx.AsyncClient | None, reasoning_off: bool = False,
 ) -> str:
     """One OpenAI-compatible /chat/completions call. Returns cleaned content."""
     url = f"{base_url.rstrip('/')}/chat/completions"
@@ -147,6 +147,11 @@ async def _chat(
         "temperature": 0,
         "max_tokens": max_tokens,
     }
+    if reasoning_off:
+        # Reasoning models share max_tokens between thinking and the answer — full
+        # thinking starves the output on long inputs (finish_reason=length), and
+        # transliteration needs none. Gemini won't accept enabled:false; minimal works.
+        payload["reasoning"] = {"effort": "minimal"}
     logger.debug("transliterate request -> %s %s", url, redact({**payload, "headers": headers}))
 
     owns_client = client is None
@@ -202,6 +207,7 @@ async def transliterate_hebrew(
                 max_tokens=settings.transliterate_max_tokens,
                 timeout=settings.transliterate_timeout_s,
                 api_key=api_key, client=client,
+                reasoning_off=(name == "OpenRouter"),
             )
         except (httpx.HTTPError, TransliterationError) as exc:
             errors.append(f"{name}: {exc}")
