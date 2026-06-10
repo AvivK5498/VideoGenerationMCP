@@ -93,6 +93,19 @@ and a `source_audio_qa` Scribe verdict on the generated speech.
 > Passing raw Hebrew in `prompt` (instead of the Latin transliteration) raises a
 > `ToolError` instructing you to call `transliterate_hebrew` first.
 
+Audition variant — approve the voice take first, then reuse it (skips TTS; the
+Scribe gate still runs on the approved file):
+
+```json
+{ "tool": "generate_elevenlabs_voiceover",
+  "arguments": { "text": "שלום, קנו עכשיו", "voice_id": "<voice>", "language": "he" } }
+// -> { "audio_path": "/tmp/....mp3", ... }  — send to the human for audition
+
+{ "tool": "generate_seedance_video",
+  "arguments": { "language": "he", "text": "שלום, קנו עכשיו",
+                 "audio_path": "/tmp/....mp3", "prompt": "<Latin scene>", "duration": 10 } }
+```
+
 ## 4. ElevenLabs voiceover (with timestamps)
 
 ```json
@@ -152,4 +165,18 @@ Human references on less-restriction task types must be `asset://` refs:
 ```json
 { "tool": "get_task", "arguments": { "task_id": "5a9b4d8f-6f1c-460d-b295-ab1d663f9b90" } }
 // -> { "task_id": "...", "status": "completed", "video_url": "https://.../out.mp4", "error": null }
+```
+
+## 8. QA the generated speech of an async job
+
+Once the task completes, run the generated-video Scribe gate (do not use local
+whisper/ASR):
+
+```json
+{ "tool": "verify_generated_audio",
+  "arguments": { "task_id": "5a9b4d8f-6f1c-460d-b295-ab1d663f9b90",
+                 "text": "שלום, קנו עכשיו את המוצר" } }
+// -> { "verdict": "pass" | "warning", "match_ratio": ..., "transcript": "...",
+//      "gate": "generated-video gate", "video_url": "https://.../out.mp4" }
+// <85% match raises a ToolError (the clip fails QA).
 ```

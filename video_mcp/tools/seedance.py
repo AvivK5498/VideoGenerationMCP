@@ -111,6 +111,7 @@ def register_seedance_tools(mcp: FastMCP, deps: Deps) -> None:
         audio_urls: list[str] | None = None,
         text: str | None = None,
         voice_id: str | None = None,
+        audio_path: str | None = None,
         image_roles: list[str] | None = None,
         other_roles: list[str] | None = None,
         auto_upload_assets: bool = False,
@@ -121,6 +122,23 @@ def register_seedance_tools(mcp: FastMCP, deps: Deps) -> None:
         wait: bool = False,
     ) -> dict[str, Any]:
         """Generate a Seedance video; auto-chain Hebrew BVAC lipsync when language is Hebrew.
+
+        HEBREW (language="he") — this tool runs the ENTIRE BVAC chain itself; do NOT
+        pre-build anything:
+        - Speech: synthesized from `text` (keep it Hebrew) with ElevenLabs eleven_v3 and
+          `voice_id` — OR pass `audio_path` (local mp3) to use a pre-approved take and
+          skip TTS. Audition flow: generate_elevenlabs_voiceover -> user approves ->
+          pass its audio_path here. Never build a black carrier, upload audio, or
+          register a carrier asset yourself; the tool does all of it and ignores yours.
+        - Prompt: pass ONLY the scene description, Latin-only (transliterate_hebrew
+          first). The "@ImageN is ..." / "@Video1 ..." reference lines and the lip-sync
+          mechanism are composed server-side — do not write them yourself (customize
+          via image_roles / other_roles).
+        - task_type is forced to seedance-2-less-restriction: the lower-moderation tier
+          required for asset-backed fictional personas. Requesting another type has no
+          effect; this is intentional, not an error.
+        - Scribe QA gates run on the source audio, and on the generated video when
+          wait=true.
 
         References split into human_image_urls (faces/people) and other_image_urls
         (product/room/scene). Generated people MUST be private assets: human refs have
@@ -137,6 +155,7 @@ def register_seedance_tools(mcp: FastMCP, deps: Deps) -> None:
                 prompt=prompt,
                 text=text,
                 voice_id=voice_id,
+                audio_path=audio_path,
                 humans=humans,
                 others=others,
                 image_roles=image_roles,
@@ -172,6 +191,45 @@ def register_seedance_tools(mcp: FastMCP, deps: Deps) -> None:
             raise ToolError(str(exc)) from exc
 
         return await _submit(deps, req, wait=wait)
+
+    @mcp.tool
+    async def verify_generated_audio(
+        text: str,
+        task_id: str | None = None,
+        video_url: str | None = None,
+    ) -> dict[str, Any]:
+        """Run the generated-video Scribe QA gate on a finished Seedance task.
+
+        Use this after an async (wait=false) Hebrew lipsync job completes: pass the
+        original spoken `text` (Hebrew) plus the `task_id` (or a direct `video_url`).
+        Downloads the video, extracts its audio, transcribes with ElevenLabs Scribe,
+        and judges against `text` (100% pass / 85-99% warning / <85% raises).
+        Do not substitute local whisper or other ASR — this is the canonical gate.
+        """
+        if not video_url:
+            if not task_id:
+                raise ToolError("provide `task_id` or `video_url`.")
+            try:
+                result = await deps.piapi.get_task(task_id)
+            except VideoMCPError as err:
+                raise ToolError(str(err)) from err
+            video_url = result.video_url
+            if not video_url:
+                raise ToolError(
+                    f"task {task_id} has no video yet (status={result.status}). "
+                    "Keep polling with get_task until it completes."
+                )
+
+        gfd, gen_video = tempfile.mkstemp(suffix=".mp4", prefix="seedance_gen_")
+        os.close(gfd)
+        gen_audio = gen_video.replace(".mp4", ".mp3")
+        try:
+            await _download(video_url, gen_video)
+            carrier_mod.extract_audio(gen_video, gen_audio, ffmpeg_bin=deps.settings.ffmpeg_bin)
+        except (VideoMCPError, httpx.HTTPError) as err:
+            raise ToolError(f"generated-video gate: could not fetch/extract audio: {err}") from err
+        verdict = await _scribe_gate(deps, gen_audio, text, label="generated-video gate")
+        return {**verdict, "video_url": video_url}
 
 
 async def _submit(deps: Deps, req: SeedanceVideoRequest, *, wait: bool, extra: dict | None = None) -> dict[str, Any]:
@@ -233,6 +291,7 @@ async def _hebrew_chain(
     prompt: str,
     text: str | None,
     voice_id: str | None,
+    audio_path: str | None,
     humans: list[str],
     others: list[str],
     image_roles: list[str] | None,
@@ -256,8 +315,13 @@ async def _hebrew_chain(
         )
     if not text:
         raise ToolError("Hebrew lipsync requires the spoken `text` argument (Hebrew is correct here).")
-    if not voice_id:
-        raise ToolError("Hebrew lipsync requires `voice_id` for ElevenLabs TTS.")
+    if not voice_id and not audio_path:
+        raise ToolError(
+            "Hebrew lipsync requires either `voice_id` (ElevenLabs TTS) or `audio_path` "
+            "(a pre-approved local mp3 of the same `text`)."
+        )
+    if audio_path and not os.path.isfile(audio_path):
+        raise ToolError(f"audio_path not found: {audio_path}")
 
     # Romanized transcript for the prompt (Hebrew -> Latin; English tokens kept exact).
     try:
@@ -265,21 +329,22 @@ async def _hebrew_chain(
     except VideoMCPError as err:
         raise ToolError(f"romanizing transcript failed: {err}") from err
 
-    # Synthesize Hebrew speech (eleven_v3, language_code "he").
-    try:
-        voice_req = VoiceoverRequest(
-            text=text, voice_id=voice_id, language="he", model_id=HEBREW_MODEL, with_timestamps=True
-        )
-    except ValidationError as exc:
-        raise ToolError(str(exc)) from exc
-    try:
-        audio, _alignment = await deps.eleven.tts_with_timestamps(voice_req)
-    except VideoMCPError as err:
-        raise ToolError(str(err)) from err
+    if not audio_path:
+        # Synthesize Hebrew speech (eleven_v3, language_code "he").
+        try:
+            voice_req = VoiceoverRequest(
+                text=text, voice_id=voice_id, language="he", model_id=HEBREW_MODEL, with_timestamps=True
+            )
+        except ValidationError as exc:
+            raise ToolError(str(exc)) from exc
+        try:
+            audio, _alignment = await deps.eleven.tts_with_timestamps(voice_req)
+        except VideoMCPError as err:
+            raise ToolError(str(err)) from err
 
-    fd, audio_path = tempfile.mkstemp(suffix=".mp3", prefix="seedance_he_")
-    with open(fd, "wb") as fh:
-        fh.write(audio)
+        fd, audio_path = tempfile.mkstemp(suffix=".mp3", prefix="seedance_he_")
+        with open(fd, "wb") as fh:
+            fh.write(audio)
 
     # GATE 1 — source MP3 must be coherent Hebrew before we build the carrier.
     source_qa = None
@@ -362,6 +427,9 @@ async def _hebrew_chain(
             raise ToolError(f"generated-video gate: could not fetch/extract audio: {err}") from err
         result["generated_audio_qa"] = await _scribe_gate(deps, gen_audio, text, label="generated-video gate")
     elif verify_speech and not wait:
-        result["generated_audio_qa"] = "pending: re-run with wait=true to verify the generated speech"
+        result["generated_audio_qa"] = (
+            "pending: once get_task reports completed, run verify_generated_audio"
+            "(task_id=..., text=<the same Hebrew text>) to QA the generated speech"
+        )
 
     return result

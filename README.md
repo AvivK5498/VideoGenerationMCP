@@ -12,6 +12,7 @@ interface to **Kling Omni** + **Seedance 2** video generation (via PiAPI) and
 | `generate_kling_video` | Kling Omni single- or multi-shot generation |
 | `generate_seedance_video` | Seedance 2 generation; auto-chains the Hebrew BVAC lipsync pipeline |
 | `generate_seedance_first_last` | Seedance first/last-frame interpolation |
+| `verify_generated_audio` | Scribe QA gate on a finished task's video (async jobs) |
 | `generate_elevenlabs_voiceover` | ElevenLabs TTS with character-level timestamps |
 | `transliterate_hebrew` | Hebrew → Latin (LLM-backed) for lipsync prompts |
 | `list_voices` | List ElevenLabs voices |

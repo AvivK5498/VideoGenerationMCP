@@ -11,6 +11,7 @@ EXPECTED_TOOLS = {
     "generate_kling_video",
     "generate_seedance_video",
     "generate_seedance_first_last",
+    "verify_generated_audio",
     "generate_elevenlabs_voiceover",
     "list_voices",
     "get_task",

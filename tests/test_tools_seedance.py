@@ -165,6 +165,65 @@ async def test_hebrew_requires_text_and_voice(monkeypatch):
         await fn(prompt="Latin prompt", language="he", voice_id="v1", verify_speech=False)
 
 
+# ------------------------------------------------- Pre-approved take (audio_path)
+
+async def test_hebrew_audio_path_skips_tts(monkeypatch, tmp_path):
+    carrier, upload, _ = _patch_chain(monkeypatch)
+    take = tmp_path / "approved.mp3"
+    take.write_bytes(b"APPROVED_AUDIO")
+    piapi = AsyncMock()
+    piapi.create_task.return_value = make_task_result()
+    eleven = AsyncMock()
+    fn = await get_tool(make_deps(piapi, eleven))
+
+    res = await fn(prompt="scene", language="he", text="שלום עולם",
+                   audio_path=str(take), duration=5, verify_speech=False)
+
+    eleven.tts_with_timestamps.assert_not_called()           # no fresh TTS
+    assert carrier.call_args.kwargs["audio_path"] == str(take)  # the approved take is muxed
+    assert res["audio_path"] == str(take)
+    piapi.create_task.assert_awaited_once()
+
+
+async def test_hebrew_audio_path_still_runs_source_gate(monkeypatch, tmp_path):
+    _patch_chain(monkeypatch)
+    take = tmp_path / "approved.mp3"
+    take.write_bytes(b"APPROVED_AUDIO")
+    piapi = AsyncMock()
+    piapi.create_task.return_value = make_task_result()
+    eleven = AsyncMock()
+    eleven.transcribe.return_value = {"text": "שלום עולם"}
+    fn = await get_tool(make_deps(piapi, eleven))
+
+    res = await fn(prompt="scene", language="he", text="שלום עולם",
+                   audio_path=str(take), duration=5, verify_speech=True)
+    eleven.transcribe.assert_awaited_once_with(str(take), language_code="he")
+    assert res["source_audio_qa"]["verdict"] == "pass"
+
+
+async def test_hebrew_audio_path_missing_file_errors(monkeypatch):
+    carrier, _, _ = _patch_chain(monkeypatch)
+    piapi = AsyncMock()
+    eleven = AsyncMock()
+    fn = await get_tool(make_deps(piapi, eleven))
+    with pytest.raises(ToolError) as ei:
+        await fn(prompt="scene", language="he", text="שלום",
+                 audio_path="/nonexistent/take.mp3", verify_speech=False)
+    assert "audio_path" in str(ei.value)
+    eleven.tts_with_timestamps.assert_not_called()
+    carrier.assert_not_called()
+    piapi.create_task.assert_not_called()
+
+
+async def test_hebrew_requires_voice_or_audio_path(monkeypatch):
+    _patch_chain(monkeypatch)
+    fn = await get_tool(make_deps(AsyncMock(), AsyncMock()))
+    with pytest.raises(ToolError) as ei:
+        await fn(prompt="Latin prompt", language="he", text="שלום", verify_speech=False)
+    msg = str(ei.value)
+    assert "voice_id" in msg and "audio_path" in msg
+
+
 # ---------------------------------------------------------------- Scribe gates
 
 async def test_source_gate_pass(monkeypatch):
@@ -242,3 +301,76 @@ async def test_non_hebrew_invalid_duration_toolerror():
     fn = await get_tool(make_deps(AsyncMock(), AsyncMock()))
     with pytest.raises(ToolError):
         await fn(prompt="anything", language="en", duration=7)
+
+
+# ------------------------------------------- Standalone gate 2 (verify_generated_audio)
+
+async def get_verify_tool(deps: Deps):
+    mcp = FastMCP("test")
+    register_seedance_tools(mcp, deps)
+    tool = await mcp.get_tool("verify_generated_audio")
+    return tool.fn
+
+
+def _patch_gate2(monkeypatch):
+    monkeypatch.setattr("video_mcp.tools.seedance._download", AsyncMock(return_value="/tmp/gen.mp4"))
+    monkeypatch.setattr(
+        "video_mcp.tools.seedance.carrier_mod.extract_audio", MagicMock(return_value="/tmp/gen.mp3")
+    )
+
+
+async def test_verify_generated_audio_by_task_id(monkeypatch):
+    _patch_gate2(monkeypatch)
+    piapi = AsyncMock()
+    piapi.get_task.return_value = make_task_result(status="completed", video="https://x/out.mp4")
+    eleven = AsyncMock()
+    eleven.transcribe.return_value = {"text": "שלום עולם"}
+    fn = await get_verify_tool(make_deps(piapi, eleven))
+
+    res = await fn(text="שלום עולם", task_id="task-9")
+    piapi.get_task.assert_awaited_once_with("task-9")
+    assert res["verdict"] == "pass"
+    assert res["gate"] == "generated-video gate"
+    assert res["video_url"] == "https://x/out.mp4"
+
+
+async def test_verify_generated_audio_by_video_url(monkeypatch):
+    _patch_gate2(monkeypatch)
+    piapi = AsyncMock()
+    eleven = AsyncMock()
+    eleven.transcribe.return_value = {"text": "שלום עולם"}
+    fn = await get_verify_tool(make_deps(piapi, eleven))
+
+    res = await fn(text="שלום עולם", video_url="https://x/direct.mp4")
+    piapi.get_task.assert_not_called()
+    assert res["verdict"] == "pass"
+
+
+async def test_verify_generated_audio_garbled_raises(monkeypatch):
+    _patch_gate2(monkeypatch)
+    piapi = AsyncMock()
+    eleven = AsyncMock()
+    eleven.transcribe.return_value = {"text": ""}
+    fn = await get_verify_tool(make_deps(piapi, AsyncMock(transcribe=eleven.transcribe)))
+
+    with pytest.raises(ToolError) as ei:
+        await fn(text="שלום עולם", video_url="https://x/direct.mp4")
+    assert "generated-video gate FAILED" in str(ei.value)
+
+
+async def test_verify_generated_audio_task_not_finished(monkeypatch):
+    _patch_gate2(monkeypatch)
+    piapi = AsyncMock()
+    piapi.get_task.return_value = make_task_result(status="processing")
+    fn = await get_verify_tool(make_deps(piapi, AsyncMock()))
+
+    with pytest.raises(ToolError) as ei:
+        await fn(text="שלום", task_id="task-9")
+    assert "no video" in str(ei.value).lower()
+
+
+async def test_verify_generated_audio_requires_source(monkeypatch):
+    fn = await get_verify_tool(make_deps(AsyncMock(), AsyncMock()))
+    with pytest.raises(ToolError) as ei:
+        await fn(text="שלום")
+    assert "task_id" in str(ei.value) and "video_url" in str(ei.value)
