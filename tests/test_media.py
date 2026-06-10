@@ -142,3 +142,19 @@ async def test_extract_frame_tool_uploads(monkeypatch):
     res = await fn(video="/local/v.mp4", upload=True)
     assert res["frame_url"] == "https://tmpfiles.org/dl/9/f.png"
     assert res["time_s"] == "last"
+
+
+async def test_host_file_uploads(monkeypatch, tmp_path):
+    f = tmp_path / "vo.mp3"
+    f.write_bytes(b"AUDIO")
+    up = AsyncMock(return_value="https://tmpfiles.org/dl/3/vo.mp3")
+    monkeypatch.setattr("video_mcp.tools.media.uploader_mod.upload_file", up)
+    fn = await get_media_tool("host_file")
+    res = await fn(path=str(f))
+    assert res == {"url": "https://tmpfiles.org/dl/3/vo.mp3", "path": str(f)}
+
+
+async def test_host_file_missing(monkeypatch):
+    fn = await get_media_tool("host_file")
+    with pytest.raises(ToolError):
+        await fn(path="/nope/vo.mp3")

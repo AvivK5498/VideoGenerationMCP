@@ -21,6 +21,7 @@ interface to **Kling Omni** + **Seedance 2** video generation (via PiAPI) and
 | `split_audio` | Cut a master voiceover at timestamps → per-clip segments |
 | `extract_frame` | Grab a frame (default: last) for first/last-frame clip bridging |
 | `stitch_videos` | Concat clips (normalized) into the final multi-clip ad |
+| `host_file` | Host a local file on a temporary public URL (non-persona refs) |
 
 Highlights: Hebrew BVAC lipsync (ElevenLabs `eleven_v3` → ffmpeg black-video carrier →
 Seedance `omni_reference`) with two Scribe audio gates; `@`-tag reference validation;

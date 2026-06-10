@@ -342,6 +342,28 @@ async def _hebrew_chain(
     except VideoMCPError as err:
         raise ToolError(f"romanizing transcript failed: {err}") from err
 
+    # Compose the BVAC prompt and run the cheap gates NOW — before any paid
+    # ElevenLabs/upload call. Role-mapped @ImageN refs (humans then others, adult
+    # framing) + scene + mechanism (@Video1) + romanized transcript guide.
+    refs = humans + others
+    subject_line = _compose_reference_lines(humans, others, image_roles, other_roles)
+    parts = [p for p in (subject_line, prompt.strip()) if p]
+    bvac_prompt = f"{' '.join(parts)}\n\n{_MECHANISM}\nRomanized transcript guide: \"{romanized}\""
+
+    if len(bvac_prompt) > 4000:
+        overhead = len(bvac_prompt) - len(prompt.strip())
+        raise ToolError(
+            f"composed prompt is {len(bvac_prompt)} chars (limit 4000). The server adds "
+            f"~{overhead} chars of reference/mechanism/transcript lines around your scene "
+            f"prompt — shorten the scene prompt to under ~{4000 - overhead} chars."
+        )
+
+    # Content gate on the assembled prompt (no young/minor/real-person, no processing terms).
+    try:
+        await assert_prompt_clean(bvac_prompt, deps.settings, use_llm=content_check)
+    except VideoMCPError as err:
+        raise ToolError(str(err)) from err
+
     if not audio_path:
         # Synthesize Hebrew speech (eleven_v3, language_code "he").
         try:
@@ -377,19 +399,6 @@ async def _hebrew_chain(
             resolved_duration, carrier_path, audio_path=audio_path, ffmpeg_bin=deps.settings.ffmpeg_bin
         )
         carrier_url = await uploader_mod.upload_file(carrier_path, upload_url=deps.settings.tmpfiles_upload_url)
-    except VideoMCPError as err:
-        raise ToolError(str(err)) from err
-
-    # Compose the BVAC prompt: role-mapped @ImageN refs (humans then others, adult
-    # framing) + scene + mechanism (@Video1) + romanized transcript guide.
-    refs = humans + others
-    subject_line = _compose_reference_lines(humans, others, image_roles, other_roles)
-    parts = [p for p in (subject_line, prompt.strip()) if p]
-    bvac_prompt = f"{' '.join(parts)}\n\n{_MECHANISM}\nRomanized transcript guide: \"{romanized}\""
-
-    # Content gate on the assembled prompt (no young/minor/real-person, no processing terms).
-    try:
-        await assert_prompt_clean(bvac_prompt, deps.settings, use_llm=content_check)
     except VideoMCPError as err:
         raise ToolError(str(err)) from err
 

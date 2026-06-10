@@ -85,6 +85,23 @@ def register_media_tools(mcp: FastMCP, deps: Deps) -> None:
         return {"segments": segments, "output_dir": out_dir}
 
     @mcp.tool
+    async def host_file(path: str) -> dict[str, Any]:
+        """Host a local file on a temporary public URL (tmpfiles, ~1h retention).
+
+        Use for non-asset references that need a provider-fetchable URL: a local
+        ElevenLabs mp3 going into `audio_urls` (English reference-audio lip-sync),
+        a product/room photo for `other_image_urls`, etc. Human/persona refs do NOT
+        go here — register those with upload_asset instead.
+        """
+        if not os.path.isfile(path):
+            raise ToolError(f"file not found: {path}")
+        try:
+            url = await uploader_mod.upload_file(path, upload_url=deps.settings.tmpfiles_upload_url)
+        except VideoMCPError as err:
+            raise ToolError(str(err)) from err
+        return {"url": url, "path": path}
+
+    @mcp.tool
     async def extract_frame(
         video: str,
         time_s: float | None = None,

@@ -165,6 +165,22 @@ async def test_hebrew_requires_text_and_voice(monkeypatch):
         await fn(prompt="Latin prompt", language="he", voice_id="v1", verify_speech=False)
 
 
+async def test_hebrew_overlong_composed_prompt_fails_before_tts(monkeypatch):
+    _patch_chain(monkeypatch)
+    piapi = AsyncMock()
+    eleven = AsyncMock()
+    fn = await get_tool(make_deps(piapi, eleven))
+
+    scene = "a detailed cafe scene. " * 175  # ~4,000 chars on its own
+    with pytest.raises(ToolError) as ei:
+        await fn(prompt=scene, language="he", text="שלום עולם", voice_id="v1",
+                 duration=5, verify_speech=False)
+    msg = str(ei.value)
+    assert "4000" in msg and "scene" in msg.lower()
+    eleven.tts_with_timestamps.assert_not_called()   # caught before any paid call
+    piapi.create_task.assert_not_called()
+
+
 # ------------------------------------------------- Pre-approved take (audio_path)
 
 async def test_hebrew_audio_path_skips_tts(monkeypatch, tmp_path):

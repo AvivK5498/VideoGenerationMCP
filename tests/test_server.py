@@ -15,6 +15,7 @@ EXPECTED_TOOLS = {
     "stitch_videos",
     "split_audio",
     "extract_frame",
+    "host_file",
     "generate_elevenlabs_voiceover",
     "list_voices",
     "get_task",
