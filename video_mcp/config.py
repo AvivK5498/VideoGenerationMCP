@@ -47,6 +47,14 @@ class Settings:
     openrouter_model: str = field(
         default_factory=lambda: _env("OPENROUTER_MODEL", "nvidia/llama-3.1-nemotron-70b-instruct")
     )
+    # Transliteration is morphology-sensitive (gender endings, vowel recovery) —
+    # it gets a dedicated strong OpenRouter model and runs OpenRouter-first.
+    transliterate_openrouter_model: str = field(
+        default_factory=lambda: _env("TRANSLITERATE_OPENROUTER_MODEL", "google/gemini-2.5-flash")
+    )
+    transliterate_primary: str = field(
+        default_factory=lambda: _env("TRANSLITERATE_PRIMARY", "openrouter")
+    )
     # gemma-4-e4b is non-reasoning; transliteration output is ~1:1 with input, so
     # 512 covers long prompts. Raise if you transliterate very long text.
     transliterate_max_tokens: int = field(default_factory=lambda: int(_env("TRANSLITERATE_MAX_TOKENS", "512")))

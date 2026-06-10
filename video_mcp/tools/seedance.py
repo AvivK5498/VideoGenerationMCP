@@ -32,7 +32,7 @@ from video_mcp.tools import Deps
 from video_mcp.utils import carrier as carrier_mod
 from video_mcp.utils import media as media_mod
 from video_mcp.utils import uploader as uploader_mod
-from video_mcp.utils.transliterate import has_hebrew, transliterate_hebrew
+from video_mcp.utils.transliterate import has_hebrew, transliterate_hebrew, validate_romanization
 
 logger = get_logger(__name__)
 
@@ -113,6 +113,7 @@ def register_seedance_tools(mcp: FastMCP, deps: Deps) -> None:
         text: str | None = None,
         voice_id: str | None = None,
         audio_path: str | None = None,
+        romanized_text: str | None = None,
         image_roles: list[str] | None = None,
         other_roles: list[str] | None = None,
         auto_upload_assets: bool = False,
@@ -135,6 +136,13 @@ def register_seedance_tools(mcp: FastMCP, deps: Deps) -> None:
           first). The "@ImageN is ..." / "@Video1 ..." reference lines and the lip-sync
           mechanism are composed server-side — do not write them yourself (customize
           via image_roles / other_roles).
+        - `romanized_text`: ALWAYS supply your own romanization of `text` — you wrote
+          the script, so your Hebrew morphology beats the fallback LLM. Rules: every
+          word pronounceable (takshivu, not tkshivu); gender agreement on endings
+          (chevra rotzah, not rotzeh); audible clusters kept (mishtaneh, not mistaneh);
+          English/brand tokens byte-for-byte; sentence-final words with extra care
+          (they drive the lip-sync hardest). A structural gate validates it; omit it
+          and an LLM (OpenRouter-first) romanizes instead.
         - task_type is forced to seedance-2-less-restriction: the lower-moderation tier
           required for asset-backed fictional personas. Requesting another type has no
           effect; this is intentional, not an error.
@@ -157,6 +165,7 @@ def register_seedance_tools(mcp: FastMCP, deps: Deps) -> None:
                 text=text,
                 voice_id=voice_id,
                 audio_path=audio_path,
+                romanized_text=romanized_text,
                 humans=humans,
                 others=others,
                 image_roles=image_roles,
@@ -293,6 +302,7 @@ async def _hebrew_chain(
     text: str | None,
     voice_id: str | None,
     audio_path: str | None,
+    romanized_text: str | None,
     humans: list[str],
     others: list[str],
     image_roles: list[str] | None,
@@ -337,10 +347,22 @@ async def _hebrew_chain(
             )
 
     # Romanized transcript for the prompt (Hebrew -> Latin; English tokens kept exact).
-    try:
-        romanized = await transliterate_hebrew(text, deps.settings)
-    except VideoMCPError as err:
-        raise ToolError(f"romanizing transcript failed: {err}") from err
+    # An agent-supplied romanization beats the LLM (the agent wrote the script and
+    # knows the intended morphology) — it just has to pass the structural gate.
+    if romanized_text:
+        problems = validate_romanization(text, romanized_text)
+        if problems:
+            raise ToolError(
+                "romanized_text failed validation: " + "; ".join(problems) +
+                ". Fix the romanization (every word pronounceable, English tokens "
+                "verbatim, one Latin word per Hebrew word ± prefixes)."
+            )
+        romanized = romanized_text.strip()
+    else:
+        try:
+            romanized = await transliterate_hebrew(text, deps.settings)
+        except VideoMCPError as err:
+            raise ToolError(f"romanizing transcript failed: {err}") from err
 
     # Compose the BVAC prompt and run the cheap gates NOW — before any paid
     # ElevenLabs/upload call. Role-mapped @ImageN refs (humans then others, adult

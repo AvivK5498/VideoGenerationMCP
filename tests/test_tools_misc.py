@@ -33,9 +33,11 @@ def _tools(deps: Deps) -> dict:
 async def test_transliterate_hebrew_with_hebrew():
     deps = _deps()
     tools = _tools(deps)
-    respx.post(f"{deps.settings.lmstudio_base_url}/chat/completions").mock(
-        return_value=httpx.Response(200, json={"choices": [{"message": {"content": "shalom world"}}]})
-    )
+    # OpenRouter-first by default; mock both providers so the test is env-independent.
+    for base in (deps.settings.openrouter_base_url, deps.settings.lmstudio_base_url):
+        respx.post(f"{base}/chat/completions").mock(
+            return_value=httpx.Response(200, json={"choices": [{"message": {"content": "shalom world"}}]})
+        )
     out = await tools["transliterate_hebrew"](text="שלום world")
 
     assert out["input"] == "שלום world"
