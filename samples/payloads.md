@@ -217,8 +217,10 @@ re-synthesis drifted a word):
 
 ## 10. Background music bed
 
-Music for speech ads is complementary, not the main event — prompt for sparse/
-low-intensity/no-hook, match the video duration, mix low with ducking:
+Music for speech ads is complementary, not the main event. Compose the prompt
+as: `<mood> underscore for <ad type>: <2-3 concrete instruments>, sparse, low
+intensity, no melodic hook, quiet background bed under speech` — vary only the
+head; the tail is mandatory. Match the video duration, mix with ducking:
 
 ```json
 { "tool": "generate_music",
