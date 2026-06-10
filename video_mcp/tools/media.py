@@ -89,29 +89,32 @@ def register_media_tools(mcp: FastMCP, deps: Deps) -> None:
         video: str,
         music: str,
         output_path: str,
-        music_gain_db: float = -20.0,
+        music_below_speech_db: float = 14.0,
+        music_gain_db: float | None = None,
         duck: bool = True,
     ) -> dict[str, Any]:
         """Lay a music bed under a video's existing speech/ambience audio.
 
-        The music loops to the video's length at `music_gain_db` (default -20 dB —
-        barely-there), and with duck=true is side-chain compressed by the speech so
-        it dips whenever someone talks. Music for speech ads is complementary, not
-        the main event — keep the gain low. Video stream is copied untouched.
-        Inputs may be URLs (downloaded first).
+        Gain is ADAPTIVE by default: both tracks are loudness-measured and the
+        music sits `music_below_speech_db` LUFS below the speech (14 = clearly
+        audible but secondary; 18-20 = barely-there). duck=true adds a gentle
+        side-chain dip while someone talks. Pass `music_gain_db` only to force a
+        fixed gain. Music for speech ads is complementary, not the main event.
+        Video stream is copied untouched; inputs may be URLs.
         """
         try:
             v = await _localize(video, ".mp4")
             m = await _localize(music, ".mp3")
             out = media_mod.mix_music_into_video(
-                v, m, output_path, music_gain_db=music_gain_db, duck=duck,
+                v, m, output_path, music_gain_db=music_gain_db,
+                music_below_speech_db=music_below_speech_db, duck=duck,
                 ffmpeg_bin=deps.settings.ffmpeg_bin,
             )
             duration = media_mod.probe_duration(out, ffprobe_bin=deps.settings.ffprobe_bin)
         except VideoMCPError as err:
             raise ToolError(str(err)) from err
         return {"output_path": out, "duration_s": round(duration, 3),
-                "music_gain_db": music_gain_db, "duck": duck}
+                "music_below_speech_db": music_below_speech_db, "duck": duck}
 
     @mcp.tool
     async def host_file(path: str) -> dict[str, Any]:

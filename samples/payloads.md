@@ -229,8 +229,13 @@ low-intensity/no-hook, match the video duration, mix low with ducking:
 { "tool": "mix_music_into_video",
   "arguments": { "video": "/path/ad.mp4", "music": "/tmp/music_....mp3",
                  "output_path": "/path/ad-with-music.mp4",
-                 "music_gain_db": -20, "duck": true } }
+                 "music_below_speech_db": 14, "duck": true } }
 ```
+
+Gain is adaptive: both tracks are loudness-measured and the bed lands
+`music_below_speech_db` LUFS under the speech (14 = audible but secondary,
+18-20 = barely-there). Do NOT verify presence with whole-mix integrated LUFS —
+speech dominates it; a quiet bed barely moves the needle.
 
 Notes: ElevenLabs caps concurrent requests per plan (429 over the cap — keep ≤2
 in flight); generation takes tens of seconds for long tracks (client retries

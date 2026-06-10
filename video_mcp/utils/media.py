@@ -129,31 +129,54 @@ def split_audio(
     return segments
 
 
+def measure_loudness(path: str, *, ffmpeg_bin: str = "ffmpeg") -> float:
+    """Integrated loudness (LUFS) of a media file's audio via ebur128."""
+    proc = subprocess.run(
+        [ffmpeg_bin, "-i", path, "-af", "ebur128", "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    lines = (proc.stderr or "").splitlines()
+    for i, line in enumerate(lines):
+        if "Integrated loudness" in line and i + 1 < len(lines):
+            try:
+                return float(lines[i + 1].split("I:")[1].split("LUFS")[0].strip())
+            except (IndexError, ValueError):
+                break
+    raise MediaError(f"could not measure loudness of {path}")
+
+
 def mix_music_into_video(
     video_path: str,
     music_path: str,
     out_path: str,
     *,
-    music_gain_db: float = -20.0,
+    music_gain_db: float | None = None,
+    music_below_speech_db: float = 14.0,
     duck: bool = True,
     ffmpeg_bin: str = "ffmpeg",
 ) -> str:
     """Mix a music bed under `video_path`'s existing audio into `out_path`.
 
-    The music loops to cover the full video, sits at `music_gain_db` (default
-    -20 dB — a barely-there bed under speech), and with `duck=True` is
-    side-chain compressed by the speech so it dips further whenever someone
-    talks. Output ends with the video; the video stream is copied untouched.
+    Gain is ADAPTIVE by default: both tracks are loudness-measured and the music
+    is placed `music_below_speech_db` LUFS below the speech (so a quiet master
+    and a hot master land the same). Pass `music_gain_db` for a fixed gain
+    instead. With `duck=True` a gentle side-chain (ratio 3) dips the bed a few
+    dB further while someone talks. The music loops to cover the video; the
+    video stream is copied untouched.
     """
     for p, what in ((video_path, "video"), (music_path, "music")):
         if not os.path.isfile(p):
             raise MediaError(f"{what} not found: {p}")
+    if music_gain_db is None:
+        speech_i = max(measure_loudness(video_path, ffmpeg_bin=ffmpeg_bin), -30.0)
+        music_i = measure_loudness(music_path, ffmpeg_bin=ffmpeg_bin)
+        music_gain_db = round((speech_i - music_below_speech_db) - music_i, 1)
     if duck:
-        # Speech (0:a) drives a sidechain compressor on the gained music bed.
+        # Gentle duck: engages on speech (~-18 dBFS threshold), ~4-6 dB of dip.
         af = (
             f"[1:a]volume={music_gain_db}dB[m];"
             "[0:a]asplit=2[voice][sc];"
-            "[m][sc]sidechaincompress=threshold=0.02:ratio=8:attack=5:release=400[duck];"
+            "[m][sc]sidechaincompress=threshold=0.125:ratio=3:attack=20:release=500[duck];"
             "[voice][duck]amix=inputs=2:duration=first:normalize=0[a]"
         )
     else:
