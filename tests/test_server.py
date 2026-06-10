@@ -17,6 +17,8 @@ EXPECTED_TOOLS = {
     "extract_frame",
     "host_file",
     "burn_captions",
+    "generate_music",
+    "mix_music_into_video",
     "generate_elevenlabs_voiceover",
     "list_voices",
     "get_task",

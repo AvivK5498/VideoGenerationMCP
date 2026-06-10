@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import tempfile
 from typing import Any
 
@@ -13,6 +14,7 @@ from video_mcp.errors import VideoMCPError
 from video_mcp.logging_config import get_logger, redact
 from video_mcp.schemas.elevenlabs import VoiceSettings, VoiceoverRequest
 from video_mcp.tools import Deps
+from video_mcp.utils import media as media_mod
 
 logger = get_logger(__name__)
 
@@ -111,3 +113,39 @@ def register_elevenlabs_tools(mcp: FastMCP, deps: Deps) -> None:
             "alignment": alignment,
             "characters": len(text),
         }
+
+    @mcp.tool
+    async def generate_music(
+        prompt: str,
+        duration_s: float,
+        force_instrumental: bool = True,
+        model_id: str = "music_v1",
+        output_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Compose a music track with Eleven Music (3-600s) from a text prompt.
+
+        For speech ads the bed must be COMPLEMENTARY, not the main event: prompt
+        for minimal/low-key/background music ("soft, sparse, no melodic hook, low
+        intensity"), keep force_instrumental=true so it never fights the voiceover,
+        match duration_s to the video, then lay it under with mix_music_into_video
+        (low gain + speech ducking).
+        """
+        if not 3 <= duration_s <= 600:
+            raise ToolError(f"duration_s must be 3-600 seconds, got {duration_s}")
+        try:
+            audio = await deps.eleven.compose_music(
+                prompt, music_length_ms=int(duration_s * 1000),
+                force_instrumental=force_instrumental, model_id=model_id,
+            )
+        except VideoMCPError as err:
+            raise ToolError(str(err)) from err
+        if not output_path:
+            fd, output_path = tempfile.mkstemp(suffix=".mp3", prefix="music_")
+            os.close(fd)
+        with open(output_path, "wb") as fh:
+            fh.write(audio)
+        try:
+            duration = media_mod.probe_duration(output_path, ffprobe_bin=deps.settings.ffprobe_bin)
+        except VideoMCPError:
+            duration = None
+        return {"audio_path": output_path, "duration_s": duration, "prompt": prompt}

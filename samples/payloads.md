@@ -215,7 +215,28 @@ re-synthesis drifted a word):
                                 { "text": "Flycard", "start": 3.0, "end": 4.4 } ] } }
 ```
 
-## 10. QA the generated speech of an async job
+## 10. Background music bed
+
+Music for speech ads is complementary, not the main event — prompt for sparse/
+low-intensity/no-hook, match the video duration, mix low with ducking:
+
+```json
+{ "tool": "generate_music",
+  "arguments": { "prompt": "minimal ambient underscore, soft pads, sparse, low intensity, no melodic hook, background bed under speech",
+                 "duration_s": 15.1 } }
+// -> { "audio_path": "/tmp/music_....mp3", "duration_s": 15.1 }
+
+{ "tool": "mix_music_into_video",
+  "arguments": { "video": "/path/ad.mp4", "music": "/tmp/music_....mp3",
+                 "output_path": "/path/ad-with-music.mp4",
+                 "music_gain_db": -20, "duck": true } }
+```
+
+Notes: ElevenLabs caps concurrent requests per plan (429 over the cap — keep ≤2
+in flight); generation takes tens of seconds for long tracks (client retries
+once); `model_id="music_v2"` exists but is account-gated (403 unless granted).
+
+## 11. QA the generated speech of an async job
 
 Once the task completes, run the generated-video Scribe gate (do not use local
 whisper/ASR):

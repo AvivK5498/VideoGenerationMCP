@@ -129,6 +129,48 @@ def split_audio(
     return segments
 
 
+def mix_music_into_video(
+    video_path: str,
+    music_path: str,
+    out_path: str,
+    *,
+    music_gain_db: float = -20.0,
+    duck: bool = True,
+    ffmpeg_bin: str = "ffmpeg",
+) -> str:
+    """Mix a music bed under `video_path`'s existing audio into `out_path`.
+
+    The music loops to cover the full video, sits at `music_gain_db` (default
+    -20 dB — a barely-there bed under speech), and with `duck=True` is
+    side-chain compressed by the speech so it dips further whenever someone
+    talks. Output ends with the video; the video stream is copied untouched.
+    """
+    for p, what in ((video_path, "video"), (music_path, "music")):
+        if not os.path.isfile(p):
+            raise MediaError(f"{what} not found: {p}")
+    if duck:
+        # Speech (0:a) drives a sidechain compressor on the gained music bed.
+        af = (
+            f"[1:a]volume={music_gain_db}dB[m];"
+            "[0:a]asplit=2[voice][sc];"
+            "[m][sc]sidechaincompress=threshold=0.02:ratio=8:attack=5:release=400[duck];"
+            "[voice][duck]amix=inputs=2:duration=first:normalize=0[a]"
+        )
+    else:
+        af = (
+            f"[1:a]volume={music_gain_db}dB[m];"
+            "[0:a][m]amix=inputs=2:duration=first:normalize=0[a]"
+        )
+    cmd = [
+        ffmpeg_bin, "-y", "-i", video_path, "-stream_loop", "-1", "-i", music_path,
+        "-filter_complex", af, "-map", "0:v", "-map", "[a]",
+        "-c:v", "copy", "-c:a", "aac", "-shortest", out_path,
+    ]
+    logger.info("Mixing music under %s -> %s (%.1f dB, duck=%s)", video_path, out_path, music_gain_db, duck)
+    _run(cmd, "ffmpeg music mix")
+    return out_path
+
+
 def extract_frame(
     video_path: str,
     out_path: str,

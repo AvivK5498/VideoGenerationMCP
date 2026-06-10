@@ -47,10 +47,10 @@ class ElevenLabsClient:
             "Content-Type": "application/json",
         }
 
-    async def _post(self, url: str, json: dict[str, Any]) -> httpx.Response:
+    async def _post(self, url: str, json: dict[str, Any], *, timeout: float = 120) -> httpx.Response:
         if self._client is not None:
             return await self._client.post(url, json=json, headers=self._headers())
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             return await client.post(url, json=json, headers=self._headers())
 
     async def _get(self, url: str) -> httpx.Response:
@@ -58,6 +58,45 @@ class ElevenLabsClient:
             return await self._client.get(url, headers=self._headers())
         async with httpx.AsyncClient() as client:
             return await client.get(url, headers=self._headers())
+
+    async def compose_music(
+        self,
+        prompt: str,
+        *,
+        music_length_ms: int,
+        force_instrumental: bool = True,
+        output_format: str = "mp3_44100_128",
+        model_id: str = "music_v1",
+    ) -> bytes:
+        """Eleven Music: compose a track from a text prompt. Returns audio bytes.
+
+        model_id: music_v1 is generally available; music_v2 exists but is
+        account-gated (403 feature_not_available unless granted).
+        """
+        url = f"{self._settings.elevenlabs_base}/music?output_format={output_format}"
+        body = {
+            "prompt": prompt,
+            "music_length_ms": music_length_ms,
+            "model_id": model_id,
+            "force_instrumental": force_instrumental,
+        }
+        logger.info("elevenlabs music: %s", redact(body))
+        # Music generation is SLOW (~tens of seconds for long tracks) and the
+        # upstream occasionally asks for a retry — one retry on timeout/5xx.
+        last_err: Exception | None = None
+        for attempt in (1, 2):
+            try:
+                resp = await self._post(url, body, timeout=300)
+            except httpx.HTTPError as exc:
+                last_err = ElevenLabsError(f"music request failed: {exc}")
+            else:
+                if resp.status_code < 400:
+                    return resp.content
+                last_err = ElevenLabsError(_parse_detail(resp), code=resp.status_code, raw=resp.text)
+                if resp.status_code < 500 and resp.status_code != 408 and resp.status_code != 429:
+                    break
+            logger.info("elevenlabs music attempt %d failed: %s", attempt, last_err)
+        raise last_err
 
     async def tts(self, req: "VoiceoverRequest") -> bytes:
         url = f"{self._settings.elevenlabs_base}/text-to-speech/{req.voice_id}"
