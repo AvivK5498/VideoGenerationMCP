@@ -149,3 +149,37 @@ def register_elevenlabs_tools(mcp: FastMCP, deps: Deps) -> None:
         except VideoMCPError:
             duration = None
         return {"audio_path": output_path, "duration_s": duration, "prompt": prompt}
+
+    @mcp.tool
+    async def generate_sound_effect(
+        prompt: str,
+        duration_seconds: float,
+        prompt_influence: float = 0.25,
+        loop: bool = True,
+        output_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Generate an ambient/diegetic sound-effect bed (0.5-30s) from a text prompt.
+
+        Generation only — the caller mixes the bed onto the video locally with
+        its own ducking recipe. Describe the soundscape concretely ("busy gym
+        ambience: muffled crowd murmur, low machine hum"), pass the clip/ad
+        runtime as duration_seconds, and keep loop=true for a seamless bed.
+        """
+        duration_seconds = max(0.5, min(30.0, duration_seconds))
+        try:
+            audio = await deps.eleven.generate_sound_effect(
+                prompt, duration_seconds=duration_seconds,
+                prompt_influence=prompt_influence, loop=loop,
+            )
+        except VideoMCPError as err:
+            raise ToolError(str(err)) from err
+        if not output_path:
+            fd, output_path = tempfile.mkstemp(suffix=".mp3", prefix="sfx_")
+            os.close(fd)
+        with open(output_path, "wb") as fh:
+            fh.write(audio)
+        try:
+            duration = media_mod.probe_duration(output_path, ffprobe_bin=deps.settings.ffprobe_bin)
+        except VideoMCPError:
+            duration = None
+        return {"audio_path": output_path, "duration_s": duration, "prompt": prompt}

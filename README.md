@@ -24,6 +24,7 @@ interface to **Kling Omni** + **Seedance 2** video generation (via PiAPI) and
 | `host_file` | Host a local file on a temporary public URL (non-persona refs) |
 | `burn_captions` | Word-timed captions via Scribe (RTL-correct Hebrew) burned onto a video |
 | `generate_music` | Eleven Music instrumental bed from a text prompt (3–600s) |
+| `generate_sound_effect` | ElevenLabs Text-to-Sound-Effects ambient/diegetic bed (0.5–30s) |
 | `mix_music_into_video` | Lay a music bed under speech: low gain + side-chain ducking |
 
 Highlights: Hebrew BVAC lipsync (ElevenLabs `eleven_v3` → ffmpeg black-video carrier →

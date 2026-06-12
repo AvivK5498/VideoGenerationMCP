@@ -98,6 +98,43 @@ class ElevenLabsClient:
             logger.info("elevenlabs music attempt %d failed: %s", attempt, last_err)
         raise last_err
 
+    async def generate_sound_effect(
+        self,
+        text: str,
+        *,
+        duration_seconds: float,
+        prompt_influence: float = 0.25,
+        loop: bool = True,
+        output_format: str = "mp3_44100_128",
+        model_id: str = "eleven_text_to_sound_v2",
+    ) -> bytes:
+        """Text-to-Sound-Effects: generate an audio bed from a prompt. Returns bytes."""
+        url = f"{self._settings.elevenlabs_base}/sound-generation?output_format={output_format}"
+        body = {
+            "text": text,
+            "duration_seconds": duration_seconds,
+            "prompt_influence": prompt_influence,
+            "loop": loop,
+            "model_id": model_id,
+        }
+        logger.info("elevenlabs sound-generation: %s", redact(body))
+        # Generation is SLOW and the upstream occasionally asks for a retry —
+        # one retry on timeout/5xx (mirrors compose_music).
+        last_err: Exception | None = None
+        for attempt in (1, 2):
+            try:
+                resp = await self._post(url, body, timeout=300)
+            except httpx.HTTPError as exc:
+                last_err = ElevenLabsError(f"sound-generation request failed: {exc}")
+            else:
+                if resp.status_code < 400:
+                    return resp.content
+                last_err = ElevenLabsError(_parse_detail(resp), code=resp.status_code, raw=resp.text)
+                if resp.status_code < 500 and resp.status_code != 408 and resp.status_code != 429:
+                    break
+            logger.info("elevenlabs sound-generation attempt %d failed: %s", attempt, last_err)
+        raise last_err
+
     async def tts(self, req: "VoiceoverRequest") -> bytes:
         url = f"{self._settings.elevenlabs_base}/text-to-speech/{req.voice_id}"
         body = req.to_body()

@@ -62,6 +62,36 @@ async def test_compose_music_error():
         await ElevenLabsClient(make_settings()).compose_music("x", music_length_ms=5000)
 
 
+@respx.mock
+async def test_generate_sound_effect_payload_and_bytes():
+    route = respx.post("https://api.elevenlabs.io/v1/sound-generation").mock(
+        return_value=httpx.Response(200, content=b"SFXBYTES")
+    )
+    out = await ElevenLabsClient(make_settings()).generate_sound_effect(
+        "busy gym ambience", duration_seconds=15
+    )
+    assert out == b"SFXBYTES"
+    req = route.calls[0].request
+    assert "output_format=mp3_44100_128" in str(req.url)
+    body = json.loads(req.content)
+    assert body == {
+        "text": "busy gym ambience",
+        "duration_seconds": 15,
+        "prompt_influence": 0.25,
+        "loop": True,
+        "model_id": "eleven_text_to_sound_v2",
+    }
+
+
+@respx.mock
+async def test_generate_sound_effect_error():
+    respx.post("https://api.elevenlabs.io/v1/sound-generation").mock(
+        return_value=httpx.Response(422, json={"detail": "bad request"})
+    )
+    with pytest.raises(ElevenLabsError):
+        await ElevenLabsClient(make_settings()).generate_sound_effect("x", duration_seconds=5)
+
+
 # ------------------------------------------------------------------ mix util
 
 @ffmpeg_required
@@ -139,6 +169,42 @@ async def test_generate_music_duration_bounds():
         await fn(prompt="x", duration_s=2)
     with pytest.raises(ToolError):
         await fn(prompt="x", duration_s=601)
+
+
+async def test_generate_sound_effect_tool(monkeypatch, tmp_path):
+    eleven = AsyncMock()
+    eleven.generate_sound_effect.return_value = b"SFX"
+    monkeypatch.setattr("video_mcp.tools.elevenlabs.media_mod.probe_duration", MagicMock(return_value=15.0))
+    fn = await get_tool("generate_sound_effect", make_deps(eleven=eleven))
+
+    res = await fn(prompt="busy gym ambience, low machine hum", duration_seconds=15)
+    kwargs = eleven.generate_sound_effect.await_args.kwargs
+    assert kwargs["duration_seconds"] == 15
+    assert kwargs["prompt_influence"] == 0.25
+    assert kwargs["loop"] is True
+    assert res == {"audio_path": res["audio_path"], "duration_s": 15.0, "prompt": "busy gym ambience, low machine hum"}
+    with open(res["audio_path"], "rb") as fh:
+        assert fh.read() == b"SFX"
+
+
+async def test_generate_sound_effect_clamps_duration(monkeypatch):
+    eleven = AsyncMock()
+    eleven.generate_sound_effect.return_value = b"SFX"
+    monkeypatch.setattr("video_mcp.tools.elevenlabs.media_mod.probe_duration", MagicMock(return_value=None))
+    fn = await get_tool("generate_sound_effect", make_deps(eleven=eleven))
+
+    await fn(prompt="x", duration_seconds=0.1)
+    assert eleven.generate_sound_effect.await_args.kwargs["duration_seconds"] == 0.5
+    await fn(prompt="x", duration_seconds=99)
+    assert eleven.generate_sound_effect.await_args.kwargs["duration_seconds"] == 30.0
+
+
+async def test_generate_sound_effect_wraps_errors():
+    eleven = AsyncMock()
+    eleven.generate_sound_effect.side_effect = ElevenLabsError("boom")
+    fn = await get_tool("generate_sound_effect", make_deps(eleven=eleven))
+    with pytest.raises(ToolError):
+        await fn(prompt="x", duration_seconds=10)
 
 
 async def test_mix_tool_passes_args(monkeypatch, tmp_path):

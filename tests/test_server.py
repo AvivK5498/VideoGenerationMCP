@@ -18,6 +18,7 @@ EXPECTED_TOOLS = {
     "host_file",
     "burn_captions",
     "generate_music",
+    "generate_sound_effect",
     "mix_music_into_video",
     "generate_elevenlabs_voiceover",
     "list_voices",
