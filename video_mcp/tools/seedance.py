@@ -32,7 +32,7 @@ from video_mcp.tools import Deps
 from video_mcp.utils import carrier as carrier_mod
 from video_mcp.utils import media as media_mod
 from video_mcp.utils import uploader as uploader_mod
-from video_mcp.utils.transliterate import has_hebrew, transliterate_hebrew, validate_romanization
+from video_mcp.utils.transliterate import has_hebrew, transliterate_hebrew, validate_phonemic
 
 logger = get_logger(__name__)
 
@@ -136,13 +136,16 @@ def register_seedance_tools(mcp: FastMCP, deps: Deps) -> None:
           first). The "@ImageN is ..." / "@Video1 ..." reference lines and the lip-sync
           mechanism are composed server-side — do not write them yourself (customize
           via image_roles / other_roles).
-        - `romanized_text`: ALWAYS supply your own romanization of `text` — you wrote
-          the script, so your Hebrew morphology beats the fallback LLM. Rules: every
-          word pronounceable (takshivu, not tkshivu); gender agreement on endings
-          (chevra rotzah, not rotzeh); audible clusters kept (mishtaneh, not mistaneh);
-          English/brand tokens byte-for-byte; sentence-final words with extra care
-          (they drive the lip-sync hardest). A structural gate validates it; omit it
-          and an LLM (OpenRouter-first) romanizes instead.
+        - `romanized_text`: ALWAYS supply your own PHONEMIC RESPELLING of `text` —
+          spell the Hebrew the way an English reader sounds it out, because Seedance
+          picks visemes from this text with an English-dominant classifier (linguistic
+          romanization makes it mouth English: chazir -> "church"). Form: syllable-
+          hyphenated, stressed syllable in CAPS, ' for schwa — חזיר -> khah-ZEER (NOT
+          chazir); גבר, קום מהספה -> GEH-ver, koom meh-hah-SAH-pah; כושר -> KOH-sher.
+          Every syllable sayable; gender/morphology respected but rendered by English
+          sound; English/brand tokens byte-for-byte; sentence-final words with extra
+          care (they drive the lip-sync hardest). A structural gate validates it; omit
+          it and an LLM (OpenRouter-first) respells instead.
         - task_type is forced to seedance-2-less-restriction: the lower-moderation tier
           required for asset-backed fictional personas. Requesting another type has no
           effect; this is intentional, not an error.
@@ -346,31 +349,37 @@ async def _hebrew_chain(
                 "(split_audio) across multiple clips."
             )
 
-    # Romanized transcript for the prompt (Hebrew -> Latin; English tokens kept exact).
-    # An agent-supplied romanization beats the LLM (the agent wrote the script and
-    # knows the intended morphology) — it just has to pass the structural gate.
+    # Phonemic transcript for the prompt: spell the Hebrew by ENGLISH SOUND so
+    # Seedance's English-dominant viseme classifier mouths Hebrew (chazir mouths
+    # "church"; khah-ZEER mouths correctly). An agent-supplied respelling beats
+    # the LLM (the agent wrote the script and knows the morphology) — it just has
+    # to pass the structural gate.
     if romanized_text:
-        problems = validate_romanization(text, romanized_text)
+        problems = validate_phonemic(text, romanized_text)
         if problems:
             raise ToolError(
                 "romanized_text failed validation: " + "; ".join(problems) +
-                ". Fix the romanization (every word pronounceable, English tokens "
-                "verbatim, one Latin word per Hebrew word ± prefixes)."
+                ". Fix the phonemic respelling (spell by English sound — khah-ZEER, "
+                "not chazir; every syllable sayable; English/brand tokens verbatim; "
+                "one token per Hebrew word ± prefixes)."
             )
         romanized = romanized_text.strip()
     else:
         try:
             romanized = await transliterate_hebrew(text, deps.settings)
         except VideoMCPError as err:
-            raise ToolError(f"romanizing transcript failed: {err}") from err
+            raise ToolError(f"phonemic respelling of transcript failed: {err}") from err
 
     # Compose the BVAC prompt and run the cheap gates NOW — before any paid
     # ElevenLabs/upload call. Role-mapped @ImageN refs (humans then others, adult
-    # framing) + scene + mechanism (@Video1) + romanized transcript guide.
+    # framing) + scene + mechanism (@Video1) + phonemic pronunciation guide.
     refs = humans + others
     subject_line = _compose_reference_lines(humans, others, image_roles, other_roles)
     parts = [p for p in (subject_line, prompt.strip()) if p]
-    bvac_prompt = f"{' '.join(parts)}\n\n{_MECHANISM}\nRomanized transcript guide: \"{romanized}\""
+    bvac_prompt = (
+        f"{' '.join(parts)}\n\n{_MECHANISM}\n"
+        f"Pronunciation guide (spelled by English sound, NOT English words): \"{romanized}\""
+    )
 
     if len(bvac_prompt) > 4000:
         overhead = len(bvac_prompt) - len(prompt.strip())

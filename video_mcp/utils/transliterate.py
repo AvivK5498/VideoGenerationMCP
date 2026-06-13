@@ -1,9 +1,15 @@
-"""Hebrew -> Latin transliteration for lip-sync prompts, via an LLM + a structural gate.
+"""Hebrew -> phonemic English-sound respelling for lip-sync prompts (LLM + a structural gate).
+
+Seedance picks visemes from the prompt text via an English-DOMINANT classifier,
+so the transcript must target the English-sound table: spell the Hebrew the way
+an English reader would sound it out (חזיר -> khah-ZEER), NOT linguistic
+romanization (chazir, which Seedance routes to "church"). We confirmed this by
+direct-PiAPI A/B (2026-06-13): respelling yields near-perfect Hebrew lip-sync.
 
 Rule-based letter mapping cannot recover the unwritten vowels of an abjad
-(שלום has no letter for the `a` in "shalom"), so transliteration is delegated to
-an LLM. Hebrew morphology (gender endings, vowel recovery, hitpael clusters) is
-where small local models fail, so the resolution order is:
+(שלום has no letter for the `a`), so respelling is delegated to an LLM. Hebrew
+morphology (gender endings, vowel recovery, hitpael clusters) is where small
+local models fail, so the resolution order is:
 
     1. OpenRouter with a dedicated strong model  (default google/gemini-3.5-flash)
     2. local LMStudio                            (offline fallback)
@@ -11,11 +17,11 @@ where small local models fail, so the resolution order is:
 (`TRANSLITERATE_PRIMARY=lmstudio` flips the order.)
 
 Every candidate — LLM-generated or agent-supplied — must pass
-`validate_romanization`: no Hebrew script, English tokens copied verbatim,
-word counts aligned, no vowel-dropped/unpronounceable words. The gate is
-structural; it cannot judge vowel *quality* — agents that wrote the Hebrew
-should supply their own romanization (`romanized_text`) instead of trusting
-the LLM.
+`validate_phonemic`: no Hebrew script, English tokens copied verbatim, word
+counts aligned, no vowel-dropped/unpronounceable words; intra-word hyphens,
+CAPS (stress) and ' (schwa) are expected. The gate is structural; it cannot
+judge vowel *quality* — agents that wrote the Hebrew should supply their own
+phonemic respelling (`romanized_text`) instead of trusting the LLM.
 
 `has_hebrew` stays a cheap pure function used for detection/validation.
 """
@@ -35,25 +41,30 @@ logger = get_logger(__name__)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 _SYSTEM_PROMPT = (
-    "You are a precise Hebrew-to-Latin phonetic transliterator for a video lip-sync "
-    "engine. Convert the Hebrew the user sends into natural, readable phonetic Latin "
-    "spelling. Output ONLY the romanized text on one line — no quotes, no notes, no Hebrew.\n\n"
+    "You respell Hebrew so an ENGLISH reader sounding it out lands on the Hebrew "
+    "pronunciation. This drives a video lip-sync engine whose viseme classifier is "
+    "English-dominant, so you MUST target the English-SOUND table — phonemic "
+    "respelling, NOT linguistic romanization. Output ONLY the respelling on one line "
+    "— no quotes, no notes, no Hebrew.\n\n"
     "Rules:\n"
-    "1. Keep punctuation, numbers, and non-Hebrew words EXACTLY unchanged (brand/CTA "
-    "tokens like 'AI' or 'Flycard' are copied byte-for-byte).\n"
-    "2. Every word must be pronounceable — never drop vowels: תקשיבו -> takshivu "
-    "(NOT tkshivu).\n"
-    "3. Respect gender agreement in verb/adjective endings: feminine subjects take -ah/-et "
-    "— חברה רוצה -> chevra rotzah (NOT rotzeh).\n"
-    "4. Keep audible consonant clusters: hitpael משתנה -> mishtaneh (NOT mistaneh).\n"
-    "5. No epenthetic vowels: חברה -> chevra (NOT chevera).\n"
-    "6. The LAST word of each sentence matters most for lip-sync — transliterate it with "
+    "1. Spell by English SOUND, not by transliteration letters: חזיר -> khah-ZEER "
+    "(NOT 'chazir' — an English reader says that as 'church'); כושר -> KOH-sher.\n"
+    "2. Hyphenate every syllable and put the STRESSED syllable in CAPS: גבר -> "
+    "GEH-ver; מהספה -> meh-hah-SAH-pah.\n"
+    "3. Use ' for a reduced schwa vowel.\n"
+    "4. Keep punctuation, numbers, and non-Hebrew words EXACTLY unchanged (brand/CTA "
+    "tokens like 'AI' or 'Flycard' are copied byte-for-byte, never respelled).\n"
+    "5. Never drop a vowel — every syllable must be sayable.\n"
+    "6. Respect Hebrew morphology (feminine endings -ah/-et, hitpael clusters) — but "
+    "always rendered by English sound.\n"
+    "7. The LAST word of each sentence matters most for lip-sync — respell it with "
     "extra care.\n\n"
     "Examples:\n"
-    "שלום עולם -> shalom olam\n"
-    "קנו עכשיו את המוצר שלנו -> knu achshav et hamutzar shelanu\n"
-    "תקשיבו, ההייטק הישראלי משתנה -> takshivu, hahaytek hayisraeli mishtaneh\n"
-    "זה מה שכל חברה רוצה -> zeh ma shekol chevra rotzah\n"
+    "גבר, קום מהספה -> GEH-ver, koom meh-hah-SAH-pah\n"
+    "חזיר -> khah-ZEER\n"
+    "כושר -> KOH-sher\n"
+    "שלום עולם -> shah-LOHM oh-LAHM\n"
+    "תקשיבו, ההייטק הישראלי משתנה -> tak-SHEE-voo, ha-HIGH-tek ha-yis-reh-eh-LEE mish-tah-NEH\n"
     "AI זה כבר לא Buzzword -> AI zeh kvar lo Buzzword"
 )
 
@@ -73,20 +84,22 @@ def has_hebrew(text: str) -> bool:
     return False
 
 
-def validate_romanization(hebrew_text: str, romanized: str) -> list[str]:
-    """Structural gate for a romanization of `hebrew_text`. Returns problems ([] = ok).
+def validate_phonemic(hebrew_text: str, romanized: str) -> list[str]:
+    """Structural gate for a phonemic respelling of `hebrew_text`. Returns problems ([] = ok).
 
     Checks what is deterministically checkable: no Hebrew script, English tokens
     preserved verbatim, word-count alignment, and no vowel-dropped words
-    (vowelless or 3+-consonant onsets after digraph collapsing). It cannot judge
-    vowel QUALITY — that is on the model/agent that produced the romanization.
+    (vowelless or 3+-consonant onsets after digraph collapsing). Intra-word
+    hyphens (syllable breaks), CAPS (stress) and ' (schwa) are allowed/expected
+    and never rejected. It cannot judge whether the spelling actually targets the
+    English-sound table — that is on the model/agent that produced it.
     """
     rom = (romanized or "").strip()
     if not rom:
-        return ["romanization is empty"]
+        return ["phonemic respelling is empty"]
     problems: list[str] = []
     if has_hebrew(rom):
-        problems.append("romanization still contains Hebrew characters")
+        problems.append("phonemic respelling still contains Hebrew characters")
 
     latin_tokens = _LATIN_TOKEN_RE.findall(hebrew_text)
     rom_words_lower = {w.lower() for w in re.findall(r"[A-Za-z0-9'-]+", rom)}
@@ -177,7 +190,7 @@ async def transliterate_hebrew(
 ) -> str:
     """Transliterate `text` to Latin (OpenRouter-first by default, LMStudio fallback).
 
-    Each provider's output must pass `validate_romanization`; a gate failure counts
+    Each provider's output must pass `validate_phonemic`; a gate failure counts
     as a provider failure and the next provider is tried. Raises
     TransliterationError when every provider fails or is rejected.
     """
@@ -212,7 +225,7 @@ async def transliterate_hebrew(
         except (httpx.HTTPError, TransliterationError) as exc:
             errors.append(f"{name}: {exc}")
             continue
-        problems = validate_romanization(text, result)
+        problems = validate_phonemic(text, result)
         if not problems:
             logger.info("transliterated via %s (%s)", name, model)
             return result

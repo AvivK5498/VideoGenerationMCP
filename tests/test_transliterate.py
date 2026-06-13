@@ -12,7 +12,7 @@ from video_mcp.utils.transliterate import (
     _clean,
     has_hebrew,
     transliterate_hebrew,
-    validate_romanization,
+    validate_phonemic,
 )
 
 LMSTUDIO = "http://localhost:1234/v1"
@@ -155,46 +155,59 @@ async def test_raises_when_result_still_hebrew():
         await transliterate_hebrew("שלום", _settings())
 
 
-# ---- validate_romanization (pure structural gate) ----
+# ---- validate_phonemic (pure structural gate) ----
 
 GOOD_HE = "תקשיבו, ההייטק הישראלי משתנה עכשיו. AI זה כבר לא Buzzword"
 GOOD_ROM = "takshivu, hahaytek hayisraeli mishtaneh achshav. AI zeh kvar lo Buzzword"
 
 
-def test_validate_romanization_accepts_good():
-    assert validate_romanization(GOOD_HE, GOOD_ROM) == []
+def test_validate_phonemic_accepts_good():
+    assert validate_phonemic(GOOD_HE, GOOD_ROM) == []
 
 
-def test_validate_romanization_rejects_hebrew_chars():
-    problems = validate_romanization("שלום עולם", "shalom עולם")
+def test_validate_phonemic_rejects_hebrew_chars():
+    problems = validate_phonemic("שלום עולם", "shalom עולם")
     assert any("Hebrew" in p for p in problems)
 
 
-def test_validate_romanization_rejects_missing_english_token():
-    problems = validate_romanization("AI זה העתיד", "ey ze ha'atid")
+def test_validate_phonemic_rejects_missing_english_token():
+    problems = validate_phonemic("AI זה העתיד", "ey ze ha'atid")
     assert any("AI" in p for p in problems)
 
 
-def test_validate_romanization_rejects_vowelless_word():
-    problems = validate_romanization("תקשיבו זה חשוב", "tkshvu zeh chashuv")
+def test_validate_phonemic_rejects_vowelless_word():
+    problems = validate_phonemic("תקשיבו זה חשוב", "tkshvu zeh chashuv")
     assert any("tkshvu" in p for p in problems)
 
 
-def test_validate_romanization_rejects_onset_cluster():
+def test_validate_phonemic_rejects_onset_cluster():
     # tkshivu has vowels later but an unpronounceable t-k-sh onset (dropped vowel).
-    problems = validate_romanization("תקשיבו זה חשוב", "tkshivu zeh chashuv")
+    problems = validate_phonemic("תקשיבו זה חשוב", "tkshivu zeh chashuv")
     assert any("tkshivu" in p for p in problems)
 
 
-def test_validate_romanization_allows_shva_onsets():
+def test_validate_phonemic_allows_shva_onsets():
     # Legit two-consonant onsets (knu, shtayim, ktzat) must pass.
-    assert validate_romanization("קנו שתיים קצת", "knu shtayim ktzat") == []
+    assert validate_phonemic("קנו שתיים קצת", "knu shtayim ktzat") == []
 
 
-def test_validate_romanization_rejects_word_count_drift():
-    problems = validate_romanization("אחת שתיים שלוש ארבע חמש שש", "achat shtayim")
+def test_validate_phonemic_rejects_word_count_drift():
+    problems = validate_phonemic("אחת שתיים שלוש ארבע חמש שש", "achat shtayim")
     assert any("word count" in p for p in problems)
 
 
-def test_validate_romanization_rejects_empty():
-    assert validate_romanization("שלום", "  ") != []
+def test_validate_phonemic_rejects_empty():
+    assert validate_phonemic("שלום", "  ") != []
+
+
+# ---- phonemic respelling form (syllable hyphens + CAPS stress + ' schwa) ----
+
+def test_validate_phonemic_accepts_respelling():
+    assert validate_phonemic("גבר, קום מהספה", "GEH-ver, koom meh-hah-SAH-pah") == []
+    assert validate_phonemic("חזיר", "khah-ZEER") == []
+    assert validate_phonemic("כושר", "KOH-sher") == []
+
+
+def test_validate_phonemic_rejects_hebrew_in_respelling():
+    problems = validate_phonemic("חזיר", "khah-ZEER חזיר")
+    assert any("Hebrew" in p for p in problems)

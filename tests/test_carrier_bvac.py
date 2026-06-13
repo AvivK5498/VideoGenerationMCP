@@ -34,6 +34,15 @@ def _has_audio_stream(path: str) -> bool:
     return "audio" in out.stdout
 
 
+def _probe_duration(path: str) -> float:
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "default=noprint_wrappers=1:nokey=1", path],
+        capture_output=True, text=True, check=True,
+    )
+    return float(out.stdout.strip())
+
+
 def test_carrier_muxes_audio():
     audio = _make_audio()
     fd, out = tempfile.mkstemp(suffix=".mp4")
@@ -41,6 +50,16 @@ def test_carrier_muxes_audio():
     make_black_carrier(5, out, audio_path=audio)
     assert os.path.getsize(out) > 0
     assert _has_audio_stream(out)  # the speech track is muxed in
+
+
+def test_carrier_at_vo_matched_duration_has_no_extra_silence():
+    # When the caller passes a VO-matched duration_s (here 2s VO -> duration_s=2),
+    # the carrier must equal the VO length, not pad beyond it.
+    audio = _make_audio()  # 2s
+    fd, out = tempfile.mkstemp(suffix=".mp4")
+    os.close(fd)
+    make_black_carrier(2, out, audio_path=audio)
+    assert abs(_probe_duration(out) - 2.0) < 0.2  # no trailing silence past the VO
 
 
 def test_extract_audio_roundtrip():

@@ -181,6 +181,25 @@ async def test_hebrew_romanized_text_override_skips_llm(monkeypatch):
     assert res["romanized_transcript"] == "shalom olam"
 
 
+async def test_hebrew_prompt_uses_phonemic_framing(monkeypatch):
+    _patch_chain(monkeypatch)
+    piapi = AsyncMock()
+    piapi.create_task.return_value = make_task_result()
+    eleven = AsyncMock()
+    eleven.tts_with_timestamps.return_value = (b"AUDIO", {})
+    fn = await get_tool(make_deps(piapi, eleven))
+
+    await fn(prompt="A man on a sofa", language="he", text="גבר, קום מהספה", voice_id="v1",
+             romanized_text="GEH-ver, koom meh-hah-SAH-pah", duration=5, verify_speech=False)
+
+    prompt = piapi.create_task.await_args.kwargs["input"]["prompt"]
+    assert 'Pronunciation guide (spelled by English sound, NOT English words):' in prompt
+    assert "GEH-ver, koom meh-hah-SAH-pah" in prompt   # phonemic transcript embedded
+    assert "Romanized transcript guide" not in prompt  # old linguistic framing gone
+    assert "@Video1" in prompt                          # audio-authoritative line kept
+    assert "ignore its black visuals" in prompt
+
+
 async def test_hebrew_romanized_text_failing_gate_errors_before_tts(monkeypatch):
     _patch_chain(monkeypatch)
     piapi = AsyncMock()
