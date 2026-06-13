@@ -49,6 +49,26 @@ def probe_video_spec(path: str, *, ffprobe_bin: str = "ffprobe") -> tuple[int, i
     return int(lines[0]), int(lines[1]), lines[2]
 
 
+def _fps_value(rate: str) -> float:
+    """Numeric fps from an ffmpeg rate string like '24/1' or '30000/1001'."""
+    if "/" in rate:
+        num, den = rate.split("/", 1)
+        den_f = float(den)
+        return float(num) / den_f if den_f else 0.0
+    return float(rate)
+
+
+def has_audio(path: str, *, ffprobe_bin: str = "ffprobe") -> bool:
+    """True if `path` has at least one audio stream (ffprobe)."""
+    proc = _run(
+        [ffprobe_bin, "-v", "error", "-select_streams", "a:0",
+         "-show_entries", "stream=codec_type",
+         "-of", "default=noprint_wrappers=1:nokey=1", path],
+        "ffprobe audio",
+    )
+    return "audio" in proc.stdout
+
+
 def stitch_videos(
     paths: list[str],
     out_path: str,
@@ -218,3 +238,169 @@ def extract_frame(
     if not os.path.isfile(out_path) or os.path.getsize(out_path) == 0:
         raise MediaError(f"no frame written to {out_path} (time_s={time_s})")
     return out_path
+
+
+# Output-duration verification tolerance (s). Re-encode/PTS rounding lands the
+# container a frame or two off the request; beyond this we treat it as a failure.
+_DURATION_TOL_S = 0.2
+
+
+def _verify_duration(path: str, expected: float, *, ffprobe_bin: str, what: str) -> float:
+    """Probe `path`, assert its duration ~= expected, return the actual duration."""
+    if not os.path.isfile(path) or os.path.getsize(path) == 0:
+        raise MediaError(f"{what} produced no output at {path}")
+    actual = probe_duration(path, ffprobe_bin=ffprobe_bin)
+    if abs(actual - expected) > _DURATION_TOL_S:
+        raise MediaError(
+            f"{what} duration off: wanted ~{expected:.3f}s, got {actual:.3f}s"
+        )
+    return actual
+
+
+def trim_video(
+    video_path: str,
+    out_path: str,
+    *,
+    duration_s: float | None = None,
+    start_s: float | None = None,
+    end_s: float | None = None,
+    ffmpeg_bin: str = "ffmpeg",
+    ffprobe_bin: str = "ffprobe",
+) -> tuple[str, float]:
+    """Frame-accurate cut of `video_path` to an exact span into `out_path`.
+
+    Span is EITHER [0, duration_s] OR [start_s, end_s]. Re-encodes (x264) for
+    frame accuracy rather than keyframe -c copy; resolution, fps and aspect ratio
+    are preserved (no scaling). A silent source yields a silent output (audio is
+    only re-encoded when present). Returns (out_path, actual_duration).
+    """
+    if not os.path.isfile(video_path):
+        raise MediaError(f"video not found: {video_path}")
+    start = 0.0 if duration_s is not None else (start_s or 0.0)
+    end = duration_s if duration_s is not None else end_s
+    if end is None or end <= start:
+        raise MediaError(f"invalid trim span: start={start}, end={end}")
+    src_dur = probe_duration(video_path, ffprobe_bin=ffprobe_bin)
+    if end > src_dur + _DURATION_TOL_S:
+        raise MediaError(f"requested span {end:.3f}s exceeds source duration {src_dur:.3f}s")
+
+    # -ss/-to as OUTPUT options (after -i) => decode-accurate seek.
+    cmd = [ffmpeg_bin, "-y", "-i", video_path, "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
+           "-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    if has_audio(video_path, ffprobe_bin=ffprobe_bin):
+        cmd += ["-c:a", "aac"]
+    else:
+        cmd += ["-an"]
+    cmd += [out_path]
+    logger.info("Trimming %s [%.3f, %.3f] -> %s", video_path, start, end, out_path)
+    _run(cmd, "ffmpeg trim")
+    actual = _verify_duration(out_path, end - start, ffprobe_bin=ffprobe_bin, what="trim")
+    return out_path, actual
+
+
+def retime_video(
+    video_path: str,
+    out_path: str,
+    *,
+    target_duration_s: float | None = None,
+    speed: float | None = None,
+    interpolate: bool = False,
+    min_speed: float = 0.5,
+    max_speed: float = 2.0,
+    ffmpeg_bin: str = "ffmpeg",
+    ffprobe_bin: str = "ffprobe",
+) -> tuple[str, float, float]:
+    """Stretch/compress `video_path` to a target duration (or explicit speed).
+
+    speed = source_dur/target_dur (1.0 unchanged, 0.5 half-speed/2x longer).
+    Implemented via PTS rescaling (setpts); `interpolate=True` adds motion
+    interpolation (minterpolate) for smoother slow-mo instead of frame
+    duplication. Audio, if present, is retimed with atempo. speed is clamped to
+    [min_speed, max_speed] — outside that range raises MediaError. Returns
+    (out_path, actual_duration, speed).
+    """
+    if not os.path.isfile(video_path):
+        raise MediaError(f"video not found: {video_path}")
+    src_dur = probe_duration(video_path, ffprobe_bin=ffprobe_bin)
+    if speed is None:
+        if target_duration_s is None or target_duration_s <= 0:
+            raise MediaError(f"target_duration_s must be > 0, got {target_duration_s}")
+        speed = src_dur / target_duration_s
+    if not (min_speed <= speed <= max_speed):
+        raise MediaError(
+            f"speed {speed:.3f} out of range [{min_speed}, {max_speed}] "
+            "(extreme retime looks broken)"
+        )
+
+    factor = 1.0 / speed  # setpts multiplier: >1 slower/longer, <1 faster/shorter
+    if interpolate:
+        _, _, rate = probe_video_spec(video_path, ffprobe_bin=ffprobe_bin)
+        fps = _fps_value(rate) or 24.0
+        vf = f"setpts={factor:.6f}*PTS,minterpolate=fps={fps:g}:mi_mode=mci:mc_mode=aobmc:vsbmc=1"
+    else:
+        vf = f"setpts={factor:.6f}*PTS"
+
+    cmd = [ffmpeg_bin, "-y", "-i", video_path, "-vf", vf, "-c:v", "libx264", "-pix_fmt", "yuv420p"]
+    if has_audio(video_path, ffprobe_bin=ffprobe_bin):
+        cmd += ["-filter:a", f"atempo={speed:.6f}", "-c:a", "aac"]
+    else:
+        cmd += ["-an"]
+    cmd += [out_path]
+    logger.info("Retiming %s speed=%.4f interpolate=%s -> %s", video_path, speed, interpolate, out_path)
+    _run(cmd, "ffmpeg retime")
+    actual = _verify_duration(out_path, src_dur / speed, ffprobe_bin=ffprobe_bin, what="retime")
+    return out_path, actual, round(speed, 4)
+
+
+def mix_narration(
+    video_path: str,
+    voiceover_path: str,
+    out_path: str,
+    *,
+    bed_path: str | None = None,
+    bed_below_voice_db: float = 14.0,
+    ffmpeg_bin: str = "ffmpeg",
+    ffprobe_bin: str = "ffprobe",
+) -> tuple[str, float]:
+    """Lay `voiceover_path` as the primary audio over `video_path` into `out_path`.
+
+    The VO plays at full level; the video stream is copied untouched. If
+    `bed_path` is given it is mixed in `bed_below_voice_db` LUFS below the VO
+    (adaptive, loudness-measured) with a gentle side-chain duck under the voice.
+    Output runs the VIDEO's length: the audio is padded with silence if shorter
+    and trimmed if longer. Returns (out_path, actual_duration).
+    """
+    for p, what in ((video_path, "video"), (voiceover_path, "voiceover")):
+        if not os.path.isfile(p):
+            raise MediaError(f"{what} not found: {p}")
+    if bed_path is not None and not os.path.isfile(bed_path):
+        raise MediaError(f"bed not found: {bed_path}")
+    video_dur = probe_duration(video_path, ffprobe_bin=ffprobe_bin)
+
+    if bed_path is None:
+        cmd = [
+            ffmpeg_bin, "-y", "-i", video_path, "-i", voiceover_path,
+            "-filter_complex", "[1:a]apad[a]", "-map", "0:v", "-map", "[a]",
+            "-c:v", "copy", "-c:a", "aac", "-t", f"{video_dur:.3f}", out_path,
+        ]
+    else:
+        vo_i = measure_loudness(voiceover_path, ffmpeg_bin=ffmpeg_bin)
+        bed_i = measure_loudness(bed_path, ffmpeg_bin=ffmpeg_bin)
+        bed_gain_db = round((vo_i - bed_below_voice_db) - bed_i, 1)
+        af = (
+            "[1:a]apad[vo];"
+            f"[2:a]volume={bed_gain_db}dB[bedv];"
+            "[vo]asplit=2[voice][sc];"
+            "[bedv][sc]sidechaincompress=threshold=0.125:ratio=3:attack=20:release=500[duck];"
+            "[voice][duck]amix=inputs=2:duration=first:normalize=0[a]"
+        )
+        cmd = [
+            ffmpeg_bin, "-y", "-i", video_path, "-i", voiceover_path,
+            "-stream_loop", "-1", "-i", bed_path,
+            "-filter_complex", af, "-map", "0:v", "-map", "[a]",
+            "-c:v", "copy", "-c:a", "aac", "-t", f"{video_dur:.3f}", out_path,
+        ]
+    logger.info("Mixing narration over %s (bed=%s) -> %s", video_path, bool(bed_path), out_path)
+    _run(cmd, "ffmpeg narration mix")
+    actual = _verify_duration(out_path, video_dur, ffprobe_bin=ffprobe_bin, what="narration mix")
+    return out_path, actual

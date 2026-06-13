@@ -21,6 +21,9 @@ interface to **Kling Omni** + **Seedance 2** video generation (via PiAPI) and
 | `split_audio` | Cut a master voiceover at timestamps → per-clip segments |
 | `extract_frame` | Grab a frame (default: last) for first/last-frame clip bridging |
 | `stitch_videos` | Concat clips (normalized) into the final multi-clip ad |
+| `trim_video` | Frame-accurate cut of a clip to an exact span (re-encode) |
+| `retime_video` | Stretch/compress a clip to a target duration (PTS, optional interpolation) |
+| `mix_narration` | Lay a voiceover as primary audio over (silent) video, optional ducked bed |
 | `host_file` | Host a local file on a temporary public URL (non-persona refs) |
 | `burn_captions` | Word-timed captions via Scribe (RTL-correct Hebrew) burned onto a video |
 | `generate_music` | Eleven Music instrumental bed from a text prompt (3–600s) |

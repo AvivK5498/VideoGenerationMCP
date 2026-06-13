@@ -14,9 +14,11 @@ from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
+from pydantic import ValidationError
 
 from video_mcp.errors import VideoMCPError
 from video_mcp.logging_config import get_logger
+from video_mcp.schemas.media import MixNarrationRequest, RetimeVideoRequest, TrimVideoRequest
 from video_mcp.tools import Deps
 from video_mcp.utils import media as media_mod
 from video_mcp.utils import uploader as uploader_mod
@@ -115,6 +117,109 @@ def register_media_tools(mcp: FastMCP, deps: Deps) -> None:
             raise ToolError(str(err)) from err
         return {"output_path": out, "duration_s": round(duration, 3),
                 "music_below_speech_db": music_below_speech_db, "duck": duck}
+
+    @mcp.tool
+    async def trim_video(
+        video_path: str,
+        output_path: str,
+        duration_s: float | None = None,
+        start_s: float | None = None,
+        end_s: float | None = None,
+    ) -> dict[str, Any]:
+        """Frame-accurately cut a clip to an exact span (re-encode, not -c copy).
+
+        Provide EITHER `duration_s` (keep [0, duration_s]) OR `start_s`+`end_s`.
+        Use this to cut a generated b-roll clip down to a voiceover segment's
+        length. Resolution/fps/aspect are preserved; a silent clip stays silent.
+        Returns the ffprobe-verified actual duration.
+        """
+        try:
+            req = TrimVideoRequest(
+                video_path=video_path, output_path=output_path,
+                duration_s=duration_s, start_s=start_s, end_s=end_s,
+            )
+        except ValidationError as exc:
+            raise ToolError(str(exc)) from exc
+        start, end = req.span
+        try:
+            out, actual = media_mod.trim_video(
+                req.video_path, req.output_path,
+                start_s=start, end_s=end,
+                ffmpeg_bin=deps.settings.ffmpeg_bin, ffprobe_bin=deps.settings.ffprobe_bin,
+            )
+        except VideoMCPError as err:
+            raise ToolError(str(err)) from err
+        return {"output_path": out, "duration_s": round(actual, 3)}
+
+    @mcp.tool
+    async def retime_video(
+        video_path: str,
+        output_path: str,
+        target_duration_s: float | None = None,
+        speed: float | None = None,
+        interpolate: bool = False,
+    ) -> dict[str, Any]:
+        """Stretch/compress a clip to hit a target duration (or explicit speed).
+
+        Provide EITHER `target_duration_s` (speed is computed as source/target)
+        OR `speed` (1.0 unchanged, 0.5 = half-speed/2x longer). Use this to slow
+        a b-roll clip slightly to fill a voiceover segment without repeating
+        footage. `interpolate=true` smooths slow-mo via motion interpolation
+        (default off = frame duplication). speed is clamped to [0.5, 2.0]; outside
+        that range is a ToolError. Audio (if any) is retimed too. ffprobe-verified.
+        """
+        try:
+            req = RetimeVideoRequest(
+                video_path=video_path, output_path=output_path,
+                target_duration_s=target_duration_s, speed=speed, interpolate=interpolate,
+            )
+        except ValidationError as exc:
+            raise ToolError(str(exc)) from exc
+        try:
+            out, actual, used_speed = media_mod.retime_video(
+                req.video_path, req.output_path,
+                target_duration_s=req.target_duration_s, speed=req.speed,
+                interpolate=req.interpolate,
+                ffmpeg_bin=deps.settings.ffmpeg_bin, ffprobe_bin=deps.settings.ffprobe_bin,
+            )
+        except VideoMCPError as err:
+            raise ToolError(str(err)) from err
+        return {"output_path": out, "duration_s": round(actual, 3), "speed": used_speed}
+
+    @mcp.tool
+    async def mix_narration(
+        video_path: str,
+        voiceover_path: str,
+        output_path: str,
+        bed_path: str | None = None,
+        bed_below_voice_db: float = 14.0,
+    ) -> dict[str, Any]:
+        """Lay a voiceover as the PRIMARY audio over a (silent) video.
+
+        The VO plays at full level and the video stream is copied untouched. An
+        optional `bed_path` (ambient/music) is mixed `bed_below_voice_db` LUFS
+        under the VO with a gentle side-chain duck. This is the inverse of
+        mix_music_into_video (which ducks a bed under speech ALREADY in the
+        video). Output runs the video's length; the audio is padded with silence
+        if shorter, trimmed if longer. ffprobe-verified.
+        """
+        try:
+            req = MixNarrationRequest(
+                video_path=video_path, voiceover_path=voiceover_path,
+                output_path=output_path, bed_path=bed_path,
+                bed_below_voice_db=bed_below_voice_db,
+            )
+        except ValidationError as exc:
+            raise ToolError(str(exc)) from exc
+        try:
+            out, actual = media_mod.mix_narration(
+                req.video_path, req.voiceover_path, req.output_path,
+                bed_path=req.bed_path, bed_below_voice_db=req.bed_below_voice_db,
+                ffmpeg_bin=deps.settings.ffmpeg_bin, ffprobe_bin=deps.settings.ffprobe_bin,
+            )
+        except VideoMCPError as err:
+            raise ToolError(str(err)) from err
+        return {"output_path": out, "duration_s": round(actual, 3)}
 
     @mcp.tool
     async def host_file(path: str) -> dict[str, Any]:
