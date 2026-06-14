@@ -376,8 +376,9 @@ async def _hebrew_chain(
     refs = humans + others
     subject_line = _compose_reference_lines(humans, others, image_roles, other_roles)
     parts = [p for p in (subject_line, prompt.strip()) if p]
+    scene_prompt = " ".join(parts)
     bvac_prompt = (
-        f"{' '.join(parts)}\n\n{_MECHANISM}\n"
+        f"{scene_prompt}\n\n{_MECHANISM}\n"
         f"Pronunciation guide (spelled by English sound, NOT English words): \"{romanized}\""
     )
 
@@ -389,9 +390,15 @@ async def _hebrew_chain(
             f"prompt — shorten the scene prompt to under ~{4000 - overhead} chars."
         )
 
-    # Content gate on the assembled prompt (no young/minor/real-person, no processing terms).
+    # Content gate the SCENE PROMPT ONLY (subject lines + agent scene prompt) — NOT the
+    # embedded phonemic pronunciation guide. The romanized guide is Hebrew spelled by
+    # English sound; a Hebrew word like קדמית respells to "kid-MEET", and \bkid\b would
+    # false-positive the age heuristic even though no minor is described. The romanized
+    # guide carries no English scene semantics; the actual spoken Hebrew `text` is screened
+    # upstream by the Spot harness's LLM classifier before spend. (Length is still checked
+    # on the full bvac_prompt above.)
     try:
-        await assert_prompt_clean(bvac_prompt, deps.settings, use_llm=content_check)
+        await assert_prompt_clean(scene_prompt, deps.settings, use_llm=content_check)
     except VideoMCPError as err:
         raise ToolError(str(err)) from err
 

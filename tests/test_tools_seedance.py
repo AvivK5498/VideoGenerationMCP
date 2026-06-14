@@ -214,6 +214,37 @@ async def test_hebrew_romanized_text_failing_gate_errors_before_tts(monkeypatch)
     piapi.create_task.assert_not_called()
 
 
+async def test_romanized_phonetic_denylist_token_passes_gate(monkeypatch):
+    # Hebrew קדמית ("anterior") respells to "kid-MEET" by English sound — the \bkid\b
+    # age heuristic must NOT false-positive on the pronunciation guide. Gate the scene
+    # prompt only; the romanized guide is excluded.
+    _patch_chain(monkeypatch)
+    piapi = AsyncMock()
+    piapi.create_task.return_value = make_task_result()
+    eleven = AsyncMock()
+    eleven.tts_with_timestamps.return_value = (b"AUDIO", {})
+    fn = await get_tool(make_deps(piapi, eleven))
+
+    res = await fn(prompt="A woman demonstrating a biceps curl in a gym", language="he",
+                   text="יד קדמית", voice_id="v1",
+                   romanized_text="yad kid-MEET, teen-DUH", duration=5, verify_speech=False)
+
+    prompt = piapi.create_task.await_args.kwargs["input"]["prompt"]
+    assert "kid-MEET" in prompt                         # phonetic guide still embedded
+    assert res["romanized_transcript"] == "yad kid-MEET, teen-DUH"
+
+
+async def test_minor_descriptor_in_scene_prompt_still_blocks_bvac(monkeypatch):
+    # A genuine minor descriptor in the SCENE PROMPT must still block, even on the BVAC path.
+    _patch_chain(monkeypatch)
+    fn = await get_tool(make_deps(AsyncMock(), AsyncMock()))
+    with pytest.raises(ToolError) as ei:
+        await fn(prompt="a young kid in the gym waving", language="he",
+                 text="שלום עולם", voice_id="v1",
+                 romanized_text="shalom olam", duration=5, verify_speech=False)
+    assert "adult" in str(ei.value).lower()
+
+
 async def test_hebrew_overlong_composed_prompt_fails_before_tts(monkeypatch):
     _patch_chain(monkeypatch)
     piapi = AsyncMock()
