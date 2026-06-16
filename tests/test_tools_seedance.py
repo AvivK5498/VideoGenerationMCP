@@ -55,6 +55,9 @@ def _patch_chain(monkeypatch, romanized: str = "shalom olam"):
     monkeypatch.setattr("video_mcp.tools.seedance.uploader_mod.upload_file", upload)
     translit = AsyncMock(return_value=romanized)
     monkeypatch.setattr("video_mcp.tools.seedance.transliterate_hebrew", translit)
+    # BVAC clip length now derives from the audio: ceil(probe_duration). Default the probe
+    # so TTS-branch tests don't hit real ffprobe on fake bytes (6.6s -> 7s clip).
+    monkeypatch.setattr("video_mcp.tools.seedance.media_mod.probe_duration", MagicMock(return_value=6.6))
     return carrier, upload, translit
 
 
@@ -300,8 +303,9 @@ async def test_hebrew_audio_path_still_runs_source_gate(monkeypatch, tmp_path):
 
 
 async def test_hebrew_audio_path_too_long_errors(monkeypatch, tmp_path):
+    # >15s of audio can't fit a single clip (12.4s now ceils to a valid 13s, so use 16s).
     _patch_chain(monkeypatch)
-    monkeypatch.setattr("video_mcp.tools.seedance.media_mod.probe_duration", MagicMock(return_value=12.4))
+    monkeypatch.setattr("video_mcp.tools.seedance.media_mod.probe_duration", MagicMock(return_value=16.0))
     take = tmp_path / "long.mp3"
     take.write_bytes(b"AUDIO")
     piapi = AsyncMock()
@@ -411,9 +415,37 @@ async def test_non_hebrew_submits_without_tts_or_carrier(monkeypatch):
 
 
 async def test_non_hebrew_invalid_duration_toolerror():
+    # Out of the 4-15 range still rejects (16 is over the max).
     fn = await get_tool(make_deps(AsyncMock(), AsyncMock()))
     with pytest.raises(ToolError):
-        await fn(prompt="anything", language="en", duration=7)
+        await fn(prompt="anything", language="en", duration=16)
+
+
+async def test_non_hebrew_duration_7_accepted(monkeypatch):
+    # Any integer 4-15 is now valid on the English path (was rejected when only 5/10/15).
+    _patch_chain(monkeypatch)
+    piapi = AsyncMock()
+    piapi.create_task.return_value = make_task_result(status="completed")
+    fn = await get_tool(make_deps(piapi, AsyncMock()))
+
+    await fn(prompt="A sunset over the ocean", language="en", duration=7)
+    assert piapi.create_task.await_args.kwargs["input"]["duration"] == 7
+
+
+async def test_hebrew_clip_duration_ceils_from_audio(monkeypatch):
+    # BVAC clip length = ceil(audio length), ignoring the caller's duration arg.
+    carrier, _, _ = _patch_chain(monkeypatch)  # default probe_duration -> 6.6s
+    piapi = AsyncMock()
+    piapi.create_task.return_value = make_task_result()
+    eleven = AsyncMock()
+    eleven.tts_with_timestamps.return_value = (b"AUDIO", {})
+    fn = await get_tool(make_deps(piapi, eleven))
+
+    await fn(prompt="scene", language="he", text="שלום עולם", voice_id="v1",
+             romanized_text="shalom olam", duration=15, verify_speech=False)
+
+    assert carrier.call_args.args[0] == 7                              # 6.6s -> 7s carrier
+    assert piapi.create_task.await_args.kwargs["input"]["duration"] == 7  # caller's 15 ignored
 
 
 # ------------------------------------------- Standalone gate 2 (verify_generated_audio)
