@@ -6,13 +6,13 @@ from pydantic import ValidationError
 from video_mcp.schemas.seedance import SeedanceVideoRequest
 
 
-@pytest.mark.parametrize("dur", [5, 10, 15])
+@pytest.mark.parametrize("dur", [4, 5, 7, 10, 13, 15])
 def test_allowed_durations(dur):
     req = SeedanceVideoRequest(prompt="p", duration=dur)
     assert req.duration == dur
 
 
-@pytest.mark.parametrize("dur", [4, 7, 20])
+@pytest.mark.parametrize("dur", [3, 0, 16, 20])
 def test_rejected_durations(dur):
     with pytest.raises(ValidationError):
         SeedanceVideoRequest(prompt="p", duration=dur)

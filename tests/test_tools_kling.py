@@ -136,4 +136,4 @@ async def test_seedance_flf_bad_duration_raises():
     deps = _deps()
     tool = register_seedance_flf_tools(FastMCP("test"), deps)
     with pytest.raises(ToolError):
-        await tool(prompt="p", image_first="https://x/a.png", duration=7)
+        await tool(prompt="p", image_first="https://x/a.png", duration=20)  # over the 4-15 max

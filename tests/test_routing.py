@@ -5,35 +5,36 @@ from __future__ import annotations
 import pytest
 
 from video_mcp.routing import (
+    ceil_audio_to_duration,
     infer_seedance_mode,
     is_hebrew_request,
-    round_duration_to_allowed,
 )
 
 
 @pytest.mark.parametrize(
     "seconds,expected",
     [
-        (5, 5),
+        (6.6, 7),      # the live BVAC case
+        (12.4, 13),    # ceil up, not nearest-round down (speech never truncated)
+        (12.6, 13),
+        (2.1, 4),      # below the API min -> clamp up to 4
+        (0.5, 4),
+        (1, 4),
+        (4.0, 4),
         (5.0, 5),
-        (1, 5),
-        (4.9, 5),
-        (6, 10),
-        (10, 10),
-        (9.5, 10),
-        (11, 15),
-        (15, 15),
-        (12.3, 15),
+        (7, 7),
+        (14.99, 15),
+        (15.0, 15),
     ],
 )
-def test_round_duration_to_allowed_boundaries(seconds, expected):
-    assert round_duration_to_allowed(seconds) == expected
+def test_ceil_audio_to_duration_boundaries(seconds, expected):
+    assert ceil_audio_to_duration(seconds) == expected
 
 
-@pytest.mark.parametrize("seconds", [16, 15.01, 100, 0, -1])
-def test_round_duration_to_allowed_rejects(seconds):
+@pytest.mark.parametrize("seconds", [15.01, 16, 100, 0, -1])
+def test_ceil_audio_to_duration_rejects(seconds):
     with pytest.raises(ValueError):
-        round_duration_to_allowed(seconds)
+        ceil_audio_to_duration(seconds)
 
 
 @pytest.mark.parametrize(

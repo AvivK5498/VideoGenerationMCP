@@ -25,7 +25,7 @@ from video_mcp.errors import VideoMCPError
 from video_mcp.logging_config import get_logger, redact
 from video_mcp.moderation import is_moderation_failure
 from video_mcp.qa import compare_transcripts
-from video_mcp.routing import is_hebrew_request, round_duration_to_allowed
+from video_mcp.routing import ceil_audio_to_duration, is_hebrew_request
 from video_mcp.schemas.elevenlabs import HEBREW_MODEL, VoiceoverRequest
 from video_mcp.schemas.seedance import SeedanceVideoRequest
 from video_mcp.tools import Deps
@@ -337,17 +337,6 @@ async def _hebrew_chain(
     if audio_path:
         if not os.path.isfile(audio_path):
             raise ToolError(f"audio_path not found: {audio_path}")
-        try:
-            resolved_for_audio = round_duration_to_allowed(duration)
-            audio_len = media_mod.probe_duration(audio_path, ffprobe_bin=deps.settings.ffprobe_bin)
-        except (ValueError, VideoMCPError) as exc:
-            raise ToolError(str(exc)) from exc
-        if audio_len > resolved_for_audio:
-            raise ToolError(
-                f"audio_path is {audio_len:.2f}s but the clip is {resolved_for_audio}s — the speech "
-                "would be cut off. Use a longer duration (5/10/15) or split the audio "
-                "(split_audio) across multiple clips."
-            )
 
     # Phonemic transcript for the prompt: spell the Hebrew by ENGLISH SOUND so
     # Seedance's English-dominant viseme classifier mouths Hebrew (chazir mouths
@@ -419,15 +408,19 @@ async def _hebrew_chain(
         with open(fd, "wb") as fh:
             fh.write(audio)
 
+    # The clip length follows the actual speech: ceil(audio length) clamped to [4,15].
+    # The caller's `duration` is ignored on the BVAC path — a tight clip avoids a silent
+    # trailing tail that Seedance otherwise fills with hallucinated lip movement.
+    try:
+        audio_len = media_mod.probe_duration(audio_path, ffprobe_bin=deps.settings.ffprobe_bin)
+        resolved_duration = ceil_audio_to_duration(audio_len)
+    except (ValueError, VideoMCPError) as exc:
+        raise ToolError(str(exc)) from exc
+
     # GATE 1 — source MP3 must be coherent Hebrew before we build the carrier.
     source_qa = None
     if verify_speech:
         source_qa = await _scribe_gate(deps, audio_path, text, label="source-mp3 gate")
-
-    try:
-        resolved_duration = round_duration_to_allowed(duration)
-    except ValueError as exc:
-        raise ToolError(str(exc)) from exc
 
     # Black 9:16 carrier with the Hebrew speech MUXED IN (true BVAC).
     cfd, carrier_path = tempfile.mkstemp(suffix=".mp4", prefix="seedance_carrier_")

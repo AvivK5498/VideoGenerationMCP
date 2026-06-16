@@ -6,23 +6,27 @@ Hebrew lipsync orchestration policy consumed by tools/seedance.py.
 
 from __future__ import annotations
 
+import math
+
 _HEBREW_LANGS = {"he", "heb", "hebrew", "iw"}
 
 
-def round_duration_to_allowed(seconds: float) -> int:
-    """Round an audio length up to the nearest allowed Seedance duration.
+def ceil_audio_to_duration(seconds: float) -> int:
+    """Clip duration that fits `seconds` of audio: ceil to a whole second, clamped to [4, 15].
 
-    <=5 -> 5 ; >5 and <=10 -> 10 ; >10 and <=15 -> 15 ; >15 or <=0 -> ValueError.
+    Seedance accepts any integer duration 4-15s. We round UP so speech is never
+    truncated (at most ~1s of trailing silent pad). Audio under 4s clamps up to the
+    API minimum of 4. Audio that ceils past 15s can't fit one clip -> caller must split.
     """
     if seconds <= 0:
-        raise ValueError(f"duration must be > 0, got {seconds!r}")
-    if seconds <= 5:
-        return 5
-    if seconds <= 10:
-        return 10
-    if seconds <= 15:
-        return 15
-    raise ValueError(f"duration {seconds!r} exceeds the maximum allowed (15s)")
+        raise ValueError(f"audio duration must be > 0, got {seconds!r}")
+    rounded = math.ceil(seconds)
+    if rounded > 15:
+        raise ValueError(
+            f"audio is {seconds:.2f}s but a single clip is at most 15s — split the audio "
+            "(split_audio) across multiple clips."
+        )
+    return max(4, rounded)
 
 
 def infer_seedance_mode(*, n_images: int, n_videos: int, n_audios: int) -> str:

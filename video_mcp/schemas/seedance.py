@@ -18,7 +18,7 @@ SeedanceMode = Literal["text_to_video", "first_last_frames", "omni_reference"]
 SeedanceResolution = Literal["480p", "720p", "1080p"]
 SeedanceAspectRatio = Literal["21:9", "16:9", "4:3", "1:1", "3:4", "9:16", "auto"]
 
-ALLOWED_DURATIONS = (5, 10, 15)
+DURATION_MIN, DURATION_MAX = 4, 15  # PiAPI accepts any integer in this range
 LESS_RESTRICTION_TYPES = {"seedance-2-less-restriction", "seedance-2-fast-less-restriction"}
 FAST_TYPES = {"seedance-2-fast", "seedance-2-fast-less-restriction"}
 
@@ -43,8 +43,10 @@ class SeedanceVideoRequest(BaseModel):
 
     @model_validator(mode="after")
     def _validate(self) -> "SeedanceVideoRequest":
-        if self.duration not in ALLOWED_DURATIONS:
-            raise ValueError(f"duration must be one of {ALLOWED_DURATIONS}, got {self.duration}")
+        if not (DURATION_MIN <= self.duration <= DURATION_MAX):
+            raise ValueError(
+                f"duration must be an integer in {DURATION_MIN}..{DURATION_MAX}, got {self.duration}"
+            )
         if self.resolution == "1080p" and self.task_type in FAST_TYPES:
             raise ValueError(f"{self.task_type} (fast) does not support 1080p resolution")
 
