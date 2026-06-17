@@ -63,6 +63,30 @@ def register_media_tools(mcp: FastMCP, deps: Deps) -> None:
         return {"output_path": out, "duration_s": round(duration, 3), "clips": len(videos)}
 
     @mcp.tool
+    async def detect_beats(
+        audio_path: str,
+        min_bpm: float = 80.0,
+        max_bpm: float = 160.0,
+    ) -> dict[str, Any]:
+        """Detect tempo and beat times of an audio track — pure analysis, no output.
+
+        Returns {"bpm": float, "beats": [seconds, ...]} with beat times ascending from
+        the track start and covering the whole file. The tempo is reported at its lower
+        octave, pinned into [min_bpm, max_bpm] (a track that reads as 172 BPM comes back
+        as ~86) — pass the window to control which octave the grid lands on. Use this to
+        beat-snap multi-clip seams onto a music bed before stitching.
+
+        Silence / no detectable pulse returns {"bpm": 0.0, "beats": []} (not an error).
+        """
+        try:
+            bpm, beats = media_mod.detect_beats(
+                audio_path, min_bpm=min_bpm, max_bpm=max_bpm, ffmpeg_bin=deps.settings.ffmpeg_bin,
+            )
+        except VideoMCPError as err:
+            raise ToolError(str(err)) from err
+        return {"bpm": bpm, "beats": beats}
+
+    @mcp.tool
     async def split_audio(
         audio_path: str,
         split_points_s: list[float],

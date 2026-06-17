@@ -16,7 +16,7 @@ from video_mcp.errors import MediaError
 from video_mcp.tools import Deps
 from video_mcp.tools.media import register_media_tools
 from video_mcp.utils.carrier import make_black_carrier
-from video_mcp.utils.media import extract_frame, probe_duration, split_audio, stitch_videos
+from video_mcp.utils.media import detect_beats, extract_frame, probe_duration, split_audio, stitch_videos
 
 _HAS_FFMPEG = shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 ffmpeg_required = pytest.mark.skipif(not _HAS_FFMPEG, reason="ffmpeg/ffprobe not installed")
@@ -158,3 +158,83 @@ async def test_host_file_missing(monkeypatch):
     fn = await get_media_tool("host_file")
     with pytest.raises(ToolError):
         await fn(path="/nope/vo.mp3")
+
+
+# --------------------------------------------------------------- detect_beats
+
+def _click_track(path: str, bpm: float, seconds: float, *, sr: int = 22050, silent: bool = False) -> str:
+    """Write a mono 16-bit WAV: a 1kHz percussive click on every beat (or silence)."""
+    import wave
+
+    import numpy as np
+
+    n = int(seconds * sr)
+    y = np.zeros(n, dtype=np.float32)
+    if not silent:
+        clen = int(0.012 * sr)
+        env = np.exp(-np.linspace(0.0, 7.0, clen)).astype(np.float32)
+        click = (np.sin(2 * np.pi * 1000.0 * np.arange(clen) / sr).astype(np.float32) * env)
+        period = 60.0 / bpm
+        t = 0.0
+        while t < seconds:
+            i = int(t * sr)
+            seg = min(clen, n - i)
+            if seg > 0:
+                y[i : i + seg] += click[:seg]
+            t += period
+    pcm = (np.clip(y, -1.0, 1.0) * 32767).astype("<i2")
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sr)
+        w.writeframes(pcm.tobytes())
+    return path
+
+
+@ffmpeg_required
+def test_detect_beats_click_track_100bpm(tmp_path):
+    src = _click_track(str(tmp_path / "click100.wav"), bpm=100.0, seconds=8.0)
+    bpm, beats = detect_beats(src)
+    assert abs(bpm - 100.0) <= 3.0                       # tempo within +/-3
+    assert len(beats) >= 10                              # covers the whole 8s file
+    assert beats == sorted(beats)                        # ascending
+    diffs = [b - a for a, b in zip(beats, beats[1:])]
+    median = sorted(diffs)[len(diffs) // 2]
+    assert abs(median - 60.0 / 100.0) <= 0.04            # spacing ~= 60/bpm = 0.6s
+
+
+@ffmpeg_required
+def test_detect_beats_reports_lower_octave(tmp_path):
+    # Clicks at 172 BPM with the default [80,160] window must fold to ~86, not 172.
+    src = _click_track(str(tmp_path / "click172.wav"), bpm=172.0, seconds=8.0)
+    bpm, beats = detect_beats(src)
+    assert 80.0 <= bpm <= 160.0
+    assert abs(bpm - 86.0) <= 5.0
+    assert len(beats) >= 8
+
+
+@ffmpeg_required
+def test_detect_beats_silence(tmp_path):
+    src = _click_track(str(tmp_path / "silence.wav"), bpm=120.0, seconds=4.0, silent=True)
+    assert detect_beats(src) == (0.0, [])
+
+
+def test_detect_beats_missing_file():
+    with pytest.raises(MediaError):
+        detect_beats("/nope/track.wav")
+
+
+@ffmpeg_required
+async def test_detect_beats_tool_shape(tmp_path):
+    src = _click_track(str(tmp_path / "click.wav"), bpm=120.0, seconds=6.0)
+    fn = await get_media_tool("detect_beats")
+    res = await fn(audio_path=src)
+    assert set(res) == {"bpm", "beats"}
+    assert isinstance(res["bpm"], float) and res["bpm"] > 0
+    assert isinstance(res["beats"], list) and all(isinstance(t, float) for t in res["beats"])
+
+
+async def test_detect_beats_tool_missing_file():
+    fn = await get_media_tool("detect_beats")
+    with pytest.raises(ToolError):
+        await fn(audio_path="/nope/track.wav")
