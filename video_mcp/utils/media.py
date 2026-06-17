@@ -9,6 +9,8 @@ from __future__ import annotations
 import os
 import subprocess
 
+import numpy as np
+
 from video_mcp.errors import MediaError
 from video_mcp.logging_config import get_logger
 
@@ -404,3 +406,119 @@ def mix_narration(
     _run(cmd, "ffmpeg narration mix")
     actual = _verify_duration(out_path, video_dur, ffprobe_bin=ffprobe_bin, what="narration mix")
     return out_path, actual
+
+
+# ---------------------------------------------------------------- Beat detection
+
+# Analysis sample rate / STFT framing for onset detection. 22050 Hz is plenty for
+# percussive transients; hop 512 -> ~43 Hz envelope, fine enough for beat phase.
+_BEAT_SR = 22050
+_BEAT_HOP = 512
+_BEAT_WIN = 1024
+_SILENCE_PEAK = 1e-4  # max |sample| below this -> treat the track as silent
+
+
+def _decode_mono_pcm(path: str, *, sr: int, ffmpeg_bin: str) -> "np.ndarray":
+    """Decode `path` to a mono float32 waveform at `sr` Hz via ffmpeg (raw f32le)."""
+    proc = subprocess.run(
+        [ffmpeg_bin, "-v", "error", "-i", path, "-ac", "1", "-ar", str(sr), "-f", "f32le", "-"],
+        capture_output=True,
+    )
+    if proc.returncode != 0:
+        stderr = (proc.stderr or b"").decode("utf-8", "replace")
+        raise MediaError(f"ffmpeg decode failed (exit {proc.returncode}): {stderr[-2000:]}")
+    return np.frombuffer(proc.stdout, dtype=np.float32)
+
+
+def _onset_envelope(y: "np.ndarray", *, win: int, hop: int) -> "np.ndarray":
+    """Spectral-flux onset envelope (positive magnitude increases, summed per frame)."""
+    if len(y) < win:
+        return np.zeros(0, dtype=np.float64)
+    window = np.hanning(win).astype(np.float32)
+    n = 1 + (len(y) - win) // hop
+    idx = np.arange(win)[None, :] + hop * np.arange(n)[:, None]
+    spec = np.abs(np.fft.rfft(y[idx] * window, axis=1))
+    flux = np.maximum(np.diff(spec, axis=0), 0.0).sum(axis=1)
+    env = np.concatenate([[0.0], flux]).astype(np.float64)
+    return env - env.mean()  # detrend so autocorrelation is about pulse, not energy
+
+
+def detect_beats(
+    audio_path: str,
+    *,
+    min_bpm: float = 80.0,
+    max_bpm: float = 160.0,
+    ffmpeg_bin: str = "ffmpeg",
+) -> tuple[float, list[float]]:
+    """Detect tempo (BPM) and beat times (seconds) of an audio track.
+
+    Pure analysis — decode + numpy DSP, no file output, no network. The tempo is
+    found by autocorrelating a spectral-flux onset envelope and searching ONLY the
+    lag band implied by [min_bpm, max_bpm], which pins the octave: a 172-BPM track
+    folds to ~86 because 172 falls outside the window while its half (86) is the
+    strongest in-band peak. Beats are a phase-aligned grid covering the whole file.
+
+    Returns (bpm, beats) with beats ascending from the track start. A missing or
+    unreadable file raises MediaError; silence / no detectable pulse returns
+    (0.0, []) so callers can treat empty as "skip snapping".
+    """
+    if not os.path.isfile(audio_path):
+        raise MediaError(f"audio not found: {audio_path}")
+    if min_bpm <= 0 or max_bpm <= min_bpm:
+        raise MediaError(f"invalid bpm window: [{min_bpm}, {max_bpm}]")
+
+    y = _decode_mono_pcm(audio_path, sr=_BEAT_SR, ffmpeg_bin=ffmpeg_bin)
+    if y.size == 0 or float(np.max(np.abs(y))) < _SILENCE_PEAK:
+        return 0.0, []
+
+    env = _onset_envelope(y, win=_BEAT_WIN, hop=_BEAT_HOP)
+    if env.size < 4:
+        return 0.0, []
+    env_sr = _BEAT_SR / _BEAT_HOP
+
+    # Autocorrelation of the onset envelope (via FFT), positive lags only.
+    nfft = 1 << int(np.ceil(np.log2(2 * env.size)))
+    spec = np.fft.rfft(env, nfft)
+    ac = np.fft.irfft(spec * np.conj(spec), nfft)[: env.size]
+
+    # Restrict the period search to the lag band for [min_bpm, max_bpm].
+    lag_min = max(1, int(np.floor(env_sr * 60.0 / max_bpm)))
+    lag_max = min(env.size - 2, int(np.ceil(env_sr * 60.0 / min_bpm)))
+    if lag_max <= lag_min:
+        return 0.0, []
+    band = ac[lag_min : lag_max + 1]
+    if float(band.max()) <= 0.0:
+        return 0.0, []
+    peak = lag_min + int(np.argmax(band))
+
+    # Parabolic interpolation around the peak for sub-frame period precision.
+    a, b, c = ac[peak - 1], ac[peak], ac[peak + 1]
+    denom = a - 2 * b + c
+    delta = float(np.clip(0.5 * (a - c) / denom, -0.5, 0.5)) if denom != 0 else 0.0
+    period = peak + delta  # in envelope frames
+    if period <= 0:
+        return 0.0, []
+    bpm = env_sr * 60.0 / period
+
+    # Phase: integer offset in [0, period) whose beat comb collects the most onset.
+    env_pos = np.maximum(env, 0.0)
+    n_beats = int(env.size / period) + 1
+    ks = np.arange(n_beats)
+    best_phase, best_score = 0, -np.inf
+    for off in range(max(1, int(round(period)))):
+        idxs = np.round(off + ks * period).astype(int)
+        idxs = idxs[idxs < env.size]
+        score = float(env_pos[idxs].sum())
+        if score > best_score:
+            best_score, best_phase = score, off
+
+    total_s = y.size / _BEAT_SR
+    beats: list[float] = []
+    frame = float(best_phase)
+    while True:
+        t = frame * _BEAT_HOP / _BEAT_SR
+        if t > total_s + 1e-6:
+            break
+        beats.append(round(t, 3))
+        frame += period
+    return round(float(bpm), 2), beats
